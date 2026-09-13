@@ -94,7 +94,7 @@ export async function createReservation(snapshot: Snapshot, raw: unknown) {
   const phone = input.phone.replace(/[^\d+]/g, "");
 
   let customer = state.customers.find(
-    (c) => c.phone.replace(/[^\d+]/g, "") === phone,
+    (c) => c.phone.replace(/[^\d+]/g, "") === phone && c.name === input.name,
   );
 
   // A public caller cannot overwrite an existing customer's profile.

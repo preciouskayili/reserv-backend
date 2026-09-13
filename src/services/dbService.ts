@@ -81,6 +81,7 @@ export class DatabaseService {
   async updateCall(
     id: string,
     updates: Partial<CallRecord>,
+    identifier: "id" | "aethex_call_id" = "id",
   ): Promise<CallRecord | null> {
     if (isSupabaseConfigured()) {
       const supabase = getSupabase();
@@ -90,7 +91,7 @@ export class DatabaseService {
           ...updates,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", id)
+        .eq(identifier, id)
         .select()
         .single();
 

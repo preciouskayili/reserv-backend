@@ -30,6 +30,8 @@ function failure(error: { code?: string; message: string }): never {
       "That booking link is already taken. Choose another.",
     );
 
+  if (error.code === "P0001") throw new HttpError(409, error.message);
+
   if (error.code === "40001")
     throw new HttpError(
       409,

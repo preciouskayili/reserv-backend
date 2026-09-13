@@ -39,17 +39,14 @@ export const isAethexConfigured = (): boolean => {
 
 export function normalizeE164(phone: string): string {
   const cleaned = phone.replace(/[\s\-()]/g, "");
-  if (cleaned.startsWith("+")) {
-    return cleaned;
+  // Local Nigerian numbers use the workspace's current WAT/Nigeria locale.
+  const normalized = /^0[789]\d{9}$/.test(cleaned)
+    ? `+234${cleaned.slice(1)}`
+    : cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
+  if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+    throw new Error("Enter a phone number with its country code, for example +234...");
   }
-  // Default to +1 if 10 digits or if country code omitted
-  if (cleaned.length === 10) {
-    return `+1${cleaned}`;
-  }
-  if (cleaned.length === 11 && cleaned.startsWith("1")) {
-    return `+${cleaned}`;
-  }
-  return `+${cleaned}`;
+  return normalized;
 }
 
 export class AethexClient {

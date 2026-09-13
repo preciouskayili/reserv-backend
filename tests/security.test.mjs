@@ -21,8 +21,8 @@ test('API protects private routes and validates booking input', async () => {
     for (const [path, method] of [['/api/bookings','GET'], ['/api/bookings/ABC123','GET'], ['/api/bookings/ABC123','PATCH'], ['/api/calls','GET'], ['/api/calls/trigger','POST'], ['/api/calls/example','GET'], ['/api/upload','POST'], ['/api/calls/webhook','POST']]) {
       assert.equal((await request(path, method, method === 'GET' ? undefined : {})).status, 401, `${method} ${path}`);
     }
-    assert.equal((await request('/api/bookings', 'POST', {})).status, 400);
-    assert.equal((await request('/api/bookings', 'POST', { customerId: 'a', serviceId: 'b', staffId: 'c', startTime: '2026-10-01T12:00:00Z', endTime: '2026-10-01T11:00:00Z' })).status, 400);
+    assert.equal((await request('/api/bookings', 'POST', {})).status, 401);
+    assert.equal((await request('/api/bookings', 'POST', { customerId: 'a', serviceId: 'b', staffId: 'c', startTime: '2026-10-01T12:00:00Z', endTime: '2026-10-01T11:00:00Z' })).status, 401);
     const malformed = await fetch('http://localhost:4198/api/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' });
     assert.equal(malformed.status, 400);
     assert.match(malformed.headers.get('content-type'), /application\/json/);

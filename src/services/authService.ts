@@ -1,4 +1,5 @@
-import { randomInt, createHash } from "node:crypto";
+import { randomInt, createHash, createHmac } from "node:crypto";
+import { getSupabase, isSupabaseConfigured } from "../lib/supabase.js";
 import jwt from "jsonwebtoken";
 import { sendOtpEmail } from "../lib/resend.js";
 
@@ -60,18 +61,19 @@ export class AuthService {
     const code = randomInt(100000, 1000000).toString();
     const expiresAt = Date.now() + OTP_TTL_MS;
 
-    otpStore.set(email, {
-      email,
-      code,
-      expiresAt,
-      attempts: 0,
-    });
+    const hash=createHmac("sha256",JWT_SECRET).update(`${email}:${code}`).digest("hex");
+    if(isSupabaseConfigured()) {
+      const {data,error}=await getSupabase().rpc("put_login_challenge",{p_email:email,p_hash:hash});
+      if(error)throw new Error("Sign-in storage is unavailable. Check the database migration.");
+      if(!data)throw new Error("Please wait a minute before requesting another code.");
+    } else { otpStore.set(email,{email,code,expiresAt,attempts:0}); }
 
     let emailResult;
     try {
       emailResult = await sendOtpEmail(email, code);
     } catch (error) {
       otpStore.delete(email);
+      if(isSupabaseConfigured())await getSupabase().from("login_challenges").delete().eq("email",email).eq("code_hash",hash);
       throw error;
     }
 
@@ -94,6 +96,12 @@ export class AuthService {
     const email = rawEmail.trim().toLowerCase();
     const code = rawCode.trim();
 
+    if(isSupabaseConfigured()) {
+      const hash=createHmac("sha256",JWT_SECRET).update(`${email}:${code}`).digest("hex");
+      const {data,error}=await getSupabase().rpc("consume_login_challenge",{p_email:email,p_hash:hash});
+      if(error)throw new Error("Sign-in storage is unavailable. Please try again.");
+      if(!data)throw new Error("This code is invalid or expired. Request a new one.");
+    } else {
     const entry = otpStore.get(email);
     if (!entry) {
       throw new Error(
@@ -122,6 +130,8 @@ export class AuthService {
 
     // Code is valid! Consume it.
     otpStore.delete(email);
+
+    }
 
     const user: UserSession = {
       id: `usr_${createHash("sha256").update(email).digest("hex")}`,

@@ -50,6 +50,11 @@ router.put("/:id/state", async (req: AuthenticatedRequest, res) => {
       payment.amount !== old.amount ||
       payment.method !== old.method ||
       payment.receiptId !== old.receiptId ||
+      payment.provider !== old.provider ||
+      payment.reference !== old.reference ||
+      payment.needsReview !== old.needsReview ||
+      payment.refundedAmount !== old.refundedAmount ||
+      payment.disputed !== old.disputed ||
       (payment.method === "gateway" && payment.status !== old.status)
     )
       throw new HttpError(

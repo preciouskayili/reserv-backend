@@ -98,6 +98,11 @@ export const DEFAULT_CALL_PREFERENCES: CallPreferences = {
   unpaidIntervalMinutes: 1440,
 };
 export interface Payment {
+  provider?: "paystack" | "stripe";
+  reference?: string;
+  needsReview?: boolean;
+  refundedAmount?: number;
+  disputed?: boolean;
   id: string;
   bookingId: string;
   amount: number;

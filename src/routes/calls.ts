@@ -270,7 +270,7 @@ router.post("/webhook", async (req: Request, res: Response) => {
         duration_seconds: duration || undefined,
         transcript: transcript || undefined,
         recording_url: recordingUrl || undefined,
-      });
+      }, "aethex_call_id");
 
       console.log(
         `[Aethex Webhook] Updated call ${callId} status to: ${status}`,

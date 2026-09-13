@@ -1,7 +1,4 @@
 import "dotenv/config";
-import fs from "node:fs";
-import path from "node:path";
-import dotenv from "dotenv";
 import express, { type ErrorRequestHandler } from "express";
 import multer from "multer";
 import cors from "cors";
@@ -11,6 +8,9 @@ import compression from "compression";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import uploadRouter from "./routes/upload.js";
 import callsRouter from "./routes/calls.js";
+import { startPaymentReconciliation, stopPaymentReconciliation } from "./payments/reconciliation.js";
+import checkoutRouter, { checkoutWebhooks } from "./routes/checkout.js";
+import receiptRouter from "./routes/receipts.js";
 import publicRouter from "./routes/public.js";
 import workspaceRouter from "./routes/workspaces.js";
 import { HttpError } from "./domain/workspace.js";
@@ -35,26 +35,6 @@ if (process.env.TRUST_PROXY_HOPS)
 app.use(helmet());
 app.use(compression());
 app.use(morgan("dev"));
-// In development, watch .env file for changes so swapping CLIENT_ORIGIN or secrets takes effect immediately
-if (process.env.NODE_ENV !== "production") {
-  const envFilePath = path.resolve(process.cwd(), ".env");
-  if (fs.existsSync(envFilePath)) {
-    fs.watch(envFilePath, () => {
-      try {
-        const parsed = dotenv.parse(fs.readFileSync(envFilePath));
-        for (const [k, v] of Object.entries(parsed)) {
-          process.env[k] = v;
-        }
-        console.log(
-          `[Config] Reloaded .env (CLIENT_ORIGIN: ${process.env.CLIENT_ORIGIN || "not set"})`
-        );
-      } catch (err) {
-        console.warn("[Config] Could not reload .env:", err);
-      }
-    });
-  }
-}
-
 /**
  * Returns allowed origins parsed directly from CLIENT_ORIGIN in .env.
  * Supports a single URL or comma-separated URLs (e.g. CLIENT_ORIGIN=http://localhost:3003).
@@ -77,7 +57,7 @@ app.use(
       const allowed = getAllowedOrigins();
 
       // Support wildcard if explicitly set in .env
-      if (allowed.includes("*") || allowed.includes(origin)) {
+      if ((process.env.NODE_ENV !== "production" && allowed.includes("*")) || allowed.includes(origin)) {
         return callback(null, true);
       }
 
@@ -86,6 +66,8 @@ app.use(
     credentials: true,
   }),
 );
+// Signature checks require the original bytes and must precede JSON parsing and browser rate limits.
+app.use("/api/payments/webhooks", checkoutWebhooks);
 app.use(express.json({ limit: "5mb" }));
 app.use(apiLimiter);
 
@@ -109,6 +91,8 @@ app.get("/health", (_req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/workspaces", workspaceRouter);
 app.use("/api/public", publicRouter);
+app.use("/api/receipts", receiptRouter);
+app.use("/api/payments", checkoutRouter);
 app.use("/api/upload", uploadRouter);
 app.use("/api/calls", callsRouter);
 app.use("/api/bookings", bookingsRouter);
@@ -153,12 +137,14 @@ const server = app.listen(port, () => {
 
   // Initialize automated background node-cron call runner
   startCallScheduler();
+  startPaymentReconciliation();
 });
 
 // Graceful shutdown on termination signals
 const handleShutdown = (signal: string) => {
   console.log(`\n[Server] Received ${signal}. Terminating gracefully...`);
   stopCallScheduler();
+  stopPaymentReconciliation();
   server.close(() => {
     console.log("[Server] HTTP server closed.");
     process.exit(0);
