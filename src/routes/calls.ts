@@ -1,3 +1,6 @@
+import { requireWorkspace, type WorkspaceRequest } from "../middleware/requireWorkspace.js";
+import { workspaces } from "../services/workspaces.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { aethex, normalizeE164 } from "../lib/aethex.js";
@@ -24,7 +27,7 @@ const triggerCallSchema = z.object({
  * POST /api/calls/trigger
  * Triggers an automated or on-demand voice call to a customer
  */
-router.post("/trigger", async (req: Request, res: Response) => {
+router.post("/trigger", requireAuth, requireWorkspace, async (req: WorkspaceRequest, res: Response) => {
   try {
     const parseResult = triggerCallSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -46,11 +49,13 @@ router.post("/trigger", async (req: Request, res: Response) => {
       customPromptVariables,
     } = parseResult.data;
 
+    const { state } = await workspaces.read(req.workspaceId!);
+    if (bookingId && !state.bookings.some(b => b.id === bookingId)) return res.status(404).json({ error: "Reservation not found" });
     const formattedToNumber = normalizeE164(toNumber);
 
     const dynamicVariables: Record<string, string | number | boolean> = {
       customer_name: customerName || "there",
-      business_name: businessName || "Bloom Studio",
+      business_name: state.business.name,
       service_name: serviceName || "your upcoming appointment",
       appointment_date: appointmentDate || "today",
       appointment_time: appointmentTime || "your scheduled time",
@@ -59,6 +64,7 @@ router.post("/trigger", async (req: Request, res: Response) => {
     };
 
     const metadata: Record<string, unknown> = {
+      business_id: req.workspaceId,
       booking_id: bookingId,
       call_type: callType,
       dispatched_at: new Date().toISOString(),
@@ -73,6 +79,7 @@ router.post("/trigger", async (req: Request, res: Response) => {
 
     const callRecord: CallRecord = {
       id: crypto.randomUUID(),
+      business_id: req.workspaceId!,
       booking_id: bookingId || null,
       aethex_call_id: aethexResponse.id,
       agent_id: aethexResponse.agent_id,
@@ -88,17 +95,6 @@ router.post("/trigger", async (req: Request, res: Response) => {
     };
 
     const savedCall = await db.createCall(callRecord);
-
-    // If linked to a booking, append to activity timeline
-    if (bookingId) {
-      await db.addBookingActivity({
-        id: crypto.randomUUID(),
-        bookingId,
-        title: `AI ${callType === "reminder" ? "reminder" : "attendance"} call dispatched`,
-        detail: `Outbound call to ${formattedToNumber} via Aethex Voice AI (Call ID: ${aethexResponse.id})`,
-        actor: "agent",
-      });
-    }
 
     return res.status(202).json({
       message: "Call queued successfully",
@@ -118,10 +114,10 @@ router.post("/trigger", async (req: Request, res: Response) => {
  * GET /api/calls
  * List call history
  */
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", requireAuth, requireWorkspace, async (req: WorkspaceRequest, res: Response) => {
   try {
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-    const calls = await db.listCalls(limit);
+    const calls = await db.listCalls(limit, req.workspaceId!);
     return res.json({ calls, total: calls.length });
   } catch (error) {
     console.error("[Calls API] List error:", error);
@@ -132,7 +128,7 @@ router.get("/", async (req: Request, res: Response) => {
 function isCronAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
-    return true; // Unrestricted in dev if CRON_SECRET is not configured
+    return process.env.NODE_ENV !== "production";
   }
 
   const headerSecret = req.headers["x-cron-secret"];
@@ -186,10 +182,10 @@ router.get("/cron/status", (req: Request, res: Response) => {
  * GET /api/calls/:id
  * Retrieve call status
  */
-router.get("/:id", async (req: Request, res: Response) => {
+router.get("/:id", requireAuth, requireWorkspace, async (req: WorkspaceRequest, res: Response) => {
   try {
     const id = String(req.params.id);
-    const call = await db.getCall(id);
+    const call = await db.getCall(id, req.workspaceId!);
     if (!call) {
       return res.status(404).json({ error: "Call not found" });
     }
@@ -226,6 +222,10 @@ router.get("/:id", async (req: Request, res: Response) => {
  * Webhook receiver for Aethex call updates and transcripts
  */
 router.post("/webhook", async (req: Request, res: Response) => {
+  const secret = process.env.AETHEX_WEBHOOK_SECRET;
+  if (!secret || req.headers["x-webhook-secret"] !== secret) {
+    return res.status(401).json({ error: "Invalid webhook credentials" });
+  }
   try {
     const event = req.body;
     const callId = event.call_id || event.id;

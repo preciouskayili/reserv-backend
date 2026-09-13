@@ -1,0 +1,11 @@
+import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
+import { workspaces, publicState } from "../services/workspaces.js";
+import { createReservation, changeReservation } from "../services/reservations.js";
+const router=Router();
+router.use(rateLimit({windowMs:60000,limit:30,standardHeaders:true,legacyHeaders:false}));
+router.get("/reservations/:code",async(req,res)=>res.json(publicState(await workspaces.byCode(String(req.params.code)),String(req.params.code))));
+router.patch("/reservations/:code",async(req,res)=>{ const code=String(req.params.code);res.json(publicState(await changeReservation(await workspaces.byCode(code),code,req.body),code)); });
+router.get("/businesses/:slug",async(req,res)=>res.json(publicState(await workspaces.bySlug(String(req.params.slug)))));
+router.post("/businesses/:slug/bookings",async(req,res)=>{ const {snapshot,booking}=await createReservation(await workspaces.bySlug(String(req.params.slug)),req.body);res.status(201).json({booking,snapshot:publicState(snapshot,booking.code)}); });
+export default router;

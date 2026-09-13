@@ -1,3 +1,4 @@
+import { randomInt, createHash } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { sendOtpEmail } from "../lib/resend.js";
 
@@ -20,6 +21,11 @@ const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_ATTEMPTS = 5;
 const JWT_SECRET = process.env.JWT_SECRET || "reserv-dev-secret-key-change-in-production";
 
+if (process.env.NODE_ENV === "production") {
+  if (!process.env.JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET.includes("reserv-dev-secret")) throw new Error("Production requires a strong JWT_SECRET (at least 32 characters).");
+  if (!process.env.RESEND_API_KEY) throw new Error("Production requires RESEND_API_KEY for sign-in.");
+}
+
 // In-memory OTP storage
 const otpStore = new Map<string, OtpEntry>();
 
@@ -36,8 +42,12 @@ export class AuthService {
   }> {
     const email = rawEmail.trim().toLowerCase();
 
-    // Generate random 6-digit code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    for (const [key, entry] of otpStore) {
+      if (entry.expiresAt <= Date.now()) otpStore.delete(key);
+    }
+    const pending = otpStore.get(email);
+    if (pending && pending.expiresAt - OTP_TTL_MS + 60_000 > Date.now()) throw new Error("Please wait a minute before requesting another code.");
+    const code = randomInt(100000, 1000000).toString();
     const expiresAt = Date.now() + OTP_TTL_MS;
 
     otpStore.set(email, {
@@ -47,7 +57,13 @@ export class AuthService {
       attempts: 0,
     });
 
-    const emailResult = await sendOtpEmail(email, code);
+    let emailResult;
+    try {
+      emailResult = await sendOtpEmail(email, code);
+    } catch (error) {
+      otpStore.delete(email);
+      throw error;
+    }
 
     return {
       success: true,
@@ -92,11 +108,11 @@ export class AuthService {
     otpStore.delete(email);
 
     const user: UserSession = {
-      id: `usr_${Buffer.from(email).toString("hex").substring(0, 12)}`,
+      id: `usr_${createHash("sha256").update(email).digest("hex")}`,
       email,
       name: email.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-      role: "owner",
-      businessId: "bloom",
+      role: "customer",
+      businessId: "",
     };
 
     const token = jwt.sign(user, JWT_SECRET, {
@@ -111,8 +127,9 @@ export class AuthService {
    */
   verifyToken(token: string): UserSession {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as UserSession;
-      return decoded;
+      const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as UserSession;
+      if (!decoded.id || !decoded.email || decoded.id !== `usr_${createHash("sha256").update(decoded.email).digest("hex")}`) throw new Error("Invalid identity");
+      return { ...decoded, role: "customer", businessId: "" };
     } catch {
       throw new Error("Invalid or expired session. Please sign in again.");
     }

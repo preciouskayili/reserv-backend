@@ -209,3 +209,15 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO business_settings (business_id, owner_name, owner_email, owner_phone, calls_enabled, reminder_minutes, unpaid_enabled, unpaid_interval_minutes)
 VALUES ('bloom', 'Jessica Miller', 'jessica@bloomstudio.com', '+1 415 555 2671', TRUE, 120, FALSE, 1440)
 ON CONFLICT (business_id) DO NOTHING;
+
+-- All application data is accessed through the authenticated backend using the
+-- service-role key. No direct anon/authenticated Data API access is granted.
+ALTER TABLE businesses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE services ENABLE ROW LEVEL SECURITY;
+ALTER TABLE staff ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bookings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE booking_activity ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE calls ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_settings ENABLE ROW LEVEL SECURITY;

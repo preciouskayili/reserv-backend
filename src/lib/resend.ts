@@ -15,6 +15,7 @@ export async function sendOtpEmail(
   const fromEmail = process.env.EMAIL_FROM || "Reserv <onboarding@resend.dev>";
 
   if (!resendClient) {
+    if (process.env.NODE_ENV === "production") throw new Error("Email delivery is not configured");
     console.log(`\n======================================================`);
     console.log(`📨 [Resend Dev Simulation] Email sent to: ${email}`);
     console.log(`🔑 Verification Code: ${code}`);

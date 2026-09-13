@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from "../lib/supabase.js";
 
 export interface CallRecord {
+  business_id?: string;
   id: string;
   booking_id?: string | null;
   aethex_call_id?: string | null;
@@ -44,6 +45,7 @@ export class DatabaseService {
         .from("calls")
         .insert({
           id: call.id,
+          business_id: call.business_id,
           booking_id: call.booking_id,
           aethex_call_id: call.aethex_call_id,
           agent_id: call.agent_id,
@@ -62,9 +64,8 @@ export class DatabaseService {
         .select()
         .single();
 
-      if (error) {
-        console.error("[DatabaseService] Error inserting call to Supabase:", error.message);
-      } else if (data) {
+      if (error) throw new Error(error.message);
+      if (data) {
         return data as CallRecord;
       }
     }
@@ -93,7 +94,8 @@ export class DatabaseService {
         .select()
         .single();
 
-      if (!error && data) {
+      if (error) throw new Error(error.message);
+      if (data) {
         return data as CallRecord;
       }
     }
@@ -113,41 +115,45 @@ export class DatabaseService {
   /**
    * Get all calls
    */
-  async listCalls(limit = 50): Promise<CallRecord[]> {
+  async listCalls(limit = 50, businessId?: string): Promise<CallRecord[]> {
     if (isSupabaseConfigured()) {
       const supabase = getSupabase();
       const { data, error } = await supabase
         .from("calls")
         .select("*")
+        .eq("business_id", businessId ?? "")
         .order("created_at", { ascending: false })
         .limit(limit);
 
-      if (!error && data) {
+      if (error) throw new Error(error.message);
+      if (data) {
         return data as CallRecord[];
       }
     }
 
-    return memoryCalls.slice(0, limit);
+    return memoryCalls.filter(c => c.business_id === businessId).slice(0, limit);
   }
 
   /**
    * Get call by ID or Aethex Call ID
    */
-  async getCall(id: string): Promise<CallRecord | null> {
+  async getCall(id: string, businessId?: string): Promise<CallRecord | null> {
     if (isSupabaseConfigured()) {
       const supabase = getSupabase();
       const { data, error } = await supabase
         .from("calls")
         .select("*")
-        .or(`id.eq.${id},aethex_call_id.eq.${id}`)
+        .eq("business_id", businessId ?? "")
+        .eq("id", id)
         .maybeSingle();
 
-      if (!error && data) {
+      if (error) throw new Error(error.message);
+      if (data) {
         return data as CallRecord;
       }
     }
 
-    return memoryCalls.find((c) => c.id === id || c.aethex_call_id === id) || null;
+    return memoryCalls.find((c) => c.business_id === businessId && (c.id === id || c.aethex_call_id === id)) || null;
   }
 
   /**
@@ -156,14 +162,15 @@ export class DatabaseService {
   async hasReminderCall(bookingId: string): Promise<boolean> {
     if (isSupabaseConfigured()) {
       const supabase = getSupabase();
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("calls")
         .select("id")
         .eq("booking_id", bookingId)
         .eq("call_type", "reminder")
         .limit(1);
 
-      if (data && data.length > 0) return true;
+      if (error) throw new Error(error.message);
+      return Boolean(data?.length);
     }
 
     return memoryCalls.some(
@@ -204,8 +211,11 @@ export class DatabaseService {
         .insert(booking)
         .select()
         .single();
-      if (!error && data) return data;
+      if (error) throw new Error(error.message);
+      return data;
     }
+    if (memoryBookings.some((existing) => existing.id === booking.id || existing.code === booking.code)) throw new Error("Booking already exists");
+    if (memoryBookings.some((existing) => existing.staff_id === booking.staff_id && existing.status !== "Cancelled" && Date.parse(existing.start_time) < Date.parse(booking.end_time) && Date.parse(existing.end_time) > Date.parse(booking.start_time))) throw new Error("This appointment time is no longer available");
     memoryBookings.unshift(booking);
     return booking;
   }
@@ -220,7 +230,8 @@ export class DatabaseService {
         .from("bookings")
         .select("*, customer:customers(*), service:services(*), staff:staff(*)")
         .order("start_time", { ascending: true });
-      if (!error && data) return data;
+      if (error) throw new Error(error.message);
+      return data;
     }
     return memoryBookings;
   }
@@ -236,7 +247,8 @@ export class DatabaseService {
         .select("*, customer:customers(*), service:services(*), staff:staff(*), activity:booking_activity(*)")
         .or(`id.eq.${identifier},code.eq.${identifier}`)
         .maybeSingle();
-      if (!error && data) return data;
+      if (error) throw new Error(error.message);
+      return data;
     }
     return memoryBookings.find((b) => b.id === identifier || b.code === identifier) || null;
   }
@@ -253,7 +265,8 @@ export class DatabaseService {
         .or(`id.eq.${identifier},code.eq.${identifier}`)
         .select()
         .single();
-      if (!error && data) return data;
+      if (error) throw new Error(error.message);
+      return data;
     }
     const idx = memoryBookings.findIndex((b) => b.id === identifier || b.code === identifier);
     if (idx !== -1) {

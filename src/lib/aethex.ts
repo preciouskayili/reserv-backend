@@ -76,6 +76,7 @@ export class AethexClient {
     const toNumber = normalizeE164(params.toNumber);
 
     if (!isAethexConfigured() || !agentId || !fromNumber) {
+      if (process.env.NODE_ENV === "production") throw new Error("Voice calling is not configured");
       console.warn(
         `[Aethex Simulation] Live Aethex credentials missing (API Key: ${Boolean(this.apiKey)}, Agent ID: ${Boolean(agentId)}, From Number: ${Boolean(fromNumber)}). Simulating successful dispatch to ${toNumber}.`
       );
