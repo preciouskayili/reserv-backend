@@ -14,6 +14,10 @@ router.use(requireAuth);
 router.get("/", async (req: AuthenticatedRequest, res) =>
   res.json({ workspaces: await workspaces.list(req.user!.id) }),
 );
+router.get("/check-slug", async (req: AuthenticatedRequest, res) => {
+  const slug = String(req.query.slug ?? "");
+  res.json(await workspaces.checkSlug(slug));
+});
 router.post("/", async (req: AuthenticatedRequest, res) => {
   const parsed = onboardingSchema.safeParse(req.body);
   if (!parsed.success)

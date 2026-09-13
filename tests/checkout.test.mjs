@@ -95,3 +95,36 @@ test('Paystack verification rejects a successful transaction for a different ten
   try { await assert.rejects(verifyProvider(attempt), /reference did not match/); }
   finally { globalThis.fetch = original; }
 });
+
+test('Stripe checkout retries keep the same idempotency key, amount and destination', async () => {
+  process.env.STRIPE_SECRET_KEY = 'sk_test_example';
+  const original = globalThis.fetch, calls = [];
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return new Response(JSON.stringify({ id: 'cs_test_example', object: 'checkout.session', url: 'https://checkout.stripe.com/c/pay/cs_test_example' }), { headers: { 'content-type': 'application/json' } }); };
+  try {
+    const stripeAttempt = { ...attempt, provider: 'stripe' };
+    await initializeProvider(stripeAttempt); await initializeProvider(stripeAttempt);
+    assert.equal(new Headers(calls[0].options.headers).get('Idempotency-Key'), `reserv-checkout-${attempt.id}`);
+    assert.equal(calls[0].options.body, calls[1].options.body);
+    const body = new URLSearchParams(calls[0].options.body);
+    assert.equal(body.get('line_items[0][price_data][unit_amount]'), '500000');
+    assert.equal(body.get('line_items[0][price_data][currency]'), 'ngn');
+    assert.equal(body.get('success_url'), `https://reserv.example/pay/ABCDEFGHIJKL?checkout=${attempt.id}`);
+    assert.equal(body.get('metadata[business_id]'), 'tenant-a');
+    await assert.rejects(initializeProvider({ ...stripeAttempt, created_at: new Date(Date.now()-25*3600000).toISOString() }), /reconciliation/);
+    assert.equal(calls.length, 2);
+  } finally { globalThis.fetch = original; }
+});
+test('Stripe verification reads provider state, not return URL parameters', async () => {
+  process.env.STRIPE_SECRET_KEY = 'sk_test_example';
+  const original = globalThis.fetch;
+  let paymentStatus = 'unpaid', sessionStatus = 'open';
+  globalThis.fetch = async () => new Response(JSON.stringify({ id: 'cs_test_example', mode: 'payment', object: 'checkout.session', payment_status: paymentStatus, status: sessionStatus, client_reference_id: attempt.id, metadata: { checkout_id: attempt.id, business_id: attempt.business_id, booking_id: attempt.booking_id }, payment_intent: 'pi_example', amount_total: 500000, currency: 'ngn', livemode: false }), { headers: { 'content-type': 'application/json' } });
+  try {
+    const value = { ...attempt, provider: 'stripe', provider_session: 'cs_test_example' };
+    assert.equal((await verifyProvider(value)).paid, false);
+    paymentStatus = 'paid'; sessionStatus = 'complete';
+    assert.equal((await verifyProvider(value)).paid, true);
+    paymentStatus = 'unpaid'; sessionStatus = 'expired';
+    assert.equal((await verifyProvider(value)).expired, true);
+  } finally { globalThis.fetch = original; }
+});

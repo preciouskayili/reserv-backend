@@ -89,19 +89,72 @@ export const workspaces = {
       );
   },
 
+  async isSlugTaken(slug: string): Promise<boolean> {
+    if (!slug) return false;
+    if (testing()) {
+      return [...testStore.values()].some(
+        (s) => s.state.business.slug.toLowerCase() === slug.toLowerCase(),
+      );
+    }
+    try {
+      const { data, error } = await db()
+        .from("businesses")
+        .select("id")
+        .eq("slug", slug.toLowerCase())
+        .maybeSingle();
+      if (error) return false;
+      return Boolean(data);
+    } catch {
+      return false;
+    }
+  },
+
+  async resolveUniqueSlug(baseSlug: string): Promise<string> {
+    let clean = baseSlug
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    if (!clean || clean.length < 2) clean = "studio";
+
+    let candidate = clean;
+    let taken = await this.isSlugTaken(candidate);
+    let counter = 2;
+    while (taken && counter <= 100) {
+      candidate = `${clean}-${counter}`;
+      taken = await this.isSlugTaken(candidate);
+      counter++;
+    }
+    if (taken) {
+      candidate = `${clean}-${Math.random().toString(36).substring(2, 6)}`;
+    }
+    return candidate;
+  },
+
+  async checkSlug(
+    slug: string,
+  ): Promise<{ available: boolean; suggestedSlug?: string }> {
+    const clean = slug
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    if (!clean || clean.length < 2) return { available: false };
+
+    const taken = await this.isSlugTaken(clean);
+    if (!taken) {
+      return { available: true, suggestedSlug: clean };
+    }
+    const unique = await this.resolveUniqueSlug(clean);
+    return { available: false, suggestedSlug: unique };
+  },
+
   async create(userId: string, state: AppState): Promise<Snapshot> {
+    if (await this.isSlugTaken(state.business.slug)) {
+      state.business.slug = await this.resolveUniqueSlug(state.business.slug);
+    }
     validateState(state, state.business.id);
     if (testing()) {
-      if (
-        [...testStore.values()].some(
-          (s) => s.state.business.slug === state.business.slug,
-        )
-      )
-        throw new HttpError(
-          409,
-          "That booking link is already taken. Choose another.",
-        );
-
       const result = { state: structuredClone(state), revision: 1 };
       testStore.set(state.business.id, result);
       const memberships = testMembers.get(userId) ?? new Set();

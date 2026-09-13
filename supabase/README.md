@@ -26,7 +26,7 @@ Reference: https://supabase.com/docs/reference/cli/supabase-db-push
 
 The combined SQL was checked against isolated PostgreSQL, including a second application, workspace creation, revision conflicts, OTP cooldown, wrong codes and replay rejection. This does not verify your hosted Supabase instance. The local check supplies placeholder Supabase roles and a storage bucket table; storage uploads require a live integration check.
 
-Before launching, apply the migration in your project and verify a new account can create a workspace, book through its public link, upload a transfer receipt and review that receipt as its owner. Verify email delivery from your own approved sender. Online gateway checkout is disabled until a payment provider is integrated. Configure the registered Aethex outbound number and agent before enabling automatic calls. Browser-based desktop/mobile visual checks remain outstanding.
+Before launching, apply the migration in your project and verify a new account can create a workspace, book through its public link, upload a transfer receipt and review that receipt as its owner. Verify email delivery from your own approved sender. Paystack and Stripe checkout are implemented; see [PAYMENTS.md](../PAYMENTS.md) for activation, webhooks and settlement assumptions. Configure the registered Aethex outbound number and agent before enabling automatic calls. Browser-based desktop/mobile visual checks remain outstanding.
 
 ## Environment keys
 

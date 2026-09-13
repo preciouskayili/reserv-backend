@@ -229,9 +229,10 @@ export const onboardingSchema = z
     slug: z
       .string()
       .trim()
-      .min(3)
+      .min(2)
       .max(60)
-      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+      .optional(),
     owner: z.string().trim().min(2).max(100),
     category: z.string().trim().min(2).max(100),
     phone: z
@@ -250,11 +251,19 @@ export function initialState(
   workspaceId = randomUUID(),
 ): AppState {
   const staffId = randomUUID();
+  const slug =
+    data.slug?.trim() ||
+    data.name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") ||
+    "studio";
   return {
     business: {
       id: workspaceId,
       name: data.name,
-      slug: data.slug,
+      slug,
       owner: data.owner,
       category: data.category,
       phone: data.phone,

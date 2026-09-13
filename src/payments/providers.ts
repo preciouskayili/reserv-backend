@@ -21,13 +21,13 @@ export function checkoutOrigin(): string | null {
   } catch { return null; }
 }
 export function providerEnabled(provider: Provider) {
-  if (!checkoutOrigin()) return false;
+  if (!checkoutOrigin() || process.env.NODE_ENV === "production" && !liveMode(provider)) return false;
   return provider === 'paystack'
     ? /^sk_(test|live)_\S+$/.test(process.env.PAYSTACK_SECRET_KEY || '')
     : /^sk_(test|live)_\S+$/.test(process.env.STRIPE_SECRET_KEY || '') && /^whsec_\S+$/.test(process.env.STRIPE_WEBHOOK_SECRET || '');
 }
 export const liveMode = (provider: Provider) => (provider === 'paystack' ? process.env.PAYSTACK_SECRET_KEY : process.env.STRIPE_SECRET_KEY)?.startsWith('sk_live_') ?? false;
-const stripeClient = () => new Stripe(process.env.STRIPE_SECRET_KEY || '', { timeout: 12000, maxNetworkRetries: 1 });
+const stripeClient = () => new Stripe(process.env.STRIPE_SECRET_KEY || '', { timeout: 12000, maxNetworkRetries: 1, httpClient: Stripe.createFetchHttpClient() });
 
 export function validCheckoutURL(provider: Provider, raw: string) {
   try { const url = new URL(raw); return url.protocol === 'https:' && !url.username && !url.password && url.hostname === (provider === 'paystack' ? 'checkout.paystack.com' : 'checkout.stripe.com'); }

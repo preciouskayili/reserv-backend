@@ -31,6 +31,10 @@ router.patch("/reservations/:code", async (req, res) => {
     ),
   );
 });
+router.get("/check-slug", async (req, res) => {
+  const slug = String(req.query.slug ?? "");
+  res.json(await workspaces.checkSlug(slug));
+});
 router.get("/businesses/:slug", async (req, res) =>
   res.json(publicState(await workspaces.bySlug(String(req.params.slug)))),
 );

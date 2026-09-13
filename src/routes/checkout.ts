@@ -14,7 +14,8 @@ async function recordAdjustment(provider: Provider, adjustment: Adjustment | nul
   if (!attempt && provider === 'stripe' && z.string().uuid().safeParse(adjustment.checkoutId).success) attempt = await paymentRepository.find('id', adjustment.checkoutId!, 'stripe');
   if (!attempt) return;
   if (!Number.isSafeInteger(adjustment.amount) || adjustment.amount < 0 || adjustment.amount > attempt.amount_minor || adjustment.originalAmount !== attempt.amount_minor || adjustment.currency !== attempt.currency || adjustment.live !== attempt.live_mode) throw new HttpError(409, 'Payment adjustment does not match checkout');
-  await checkoutService.reconcile(attempt);
+  const settled = await checkoutService.reconcile(attempt);
+  if (settled.status !== 'succeeded' || settled.provider_transaction !== adjustment.reference) throw new HttpError(503, 'Original payment is not reconciled yet; retry delivery');
   await paymentRepository.adjust(attempt.id, adjustment);
 }
 export const checkoutWebhooks = Router();
