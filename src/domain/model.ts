@@ -117,6 +117,11 @@ export interface AppState {
   bookings: Booking[];
   payments?: Payment[];
   agentActivity: AgentActivity[];
-  settings: { reminders: boolean; confirmations: boolean; owner: string; calls?: CallPreferences };
+  settings: {
+    reminders: boolean;
+    confirmations: boolean;
+    owner: string;
+    calls?: CallPreferences;
+  };
   loaded: boolean;
 }

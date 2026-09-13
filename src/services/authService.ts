@@ -19,11 +19,20 @@ export interface UserSession {
 
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_ATTEMPTS = 5;
-const JWT_SECRET = process.env.JWT_SECRET || "reserv-dev-secret-key-change-in-production";
+const JWT_SECRET =
+  process.env.JWT_SECRET || "reserv-dev-secret-key-change-in-production";
 
 if (process.env.NODE_ENV === "production") {
-  if (!process.env.JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET.includes("reserv-dev-secret")) throw new Error("Production requires a strong JWT_SECRET (at least 32 characters).");
-  if (!process.env.RESEND_API_KEY) throw new Error("Production requires RESEND_API_KEY for sign-in.");
+  if (
+    !process.env.JWT_SECRET ||
+    JWT_SECRET.length < 32 ||
+    JWT_SECRET.includes("reserv-dev-secret")
+  )
+    throw new Error(
+      "Production requires a strong JWT_SECRET (at least 32 characters).",
+    );
+  if (!process.env.RESEND_API_KEY)
+    throw new Error("Production requires RESEND_API_KEY for sign-in.");
 }
 
 // In-memory OTP storage
@@ -46,7 +55,8 @@ export class AuthService {
       if (entry.expiresAt <= Date.now()) otpStore.delete(key);
     }
     const pending = otpStore.get(email);
-    if (pending && pending.expiresAt - OTP_TTL_MS + 60_000 > Date.now()) throw new Error("Please wait a minute before requesting another code.");
+    if (pending && pending.expiresAt - OTP_TTL_MS + 60_000 > Date.now())
+      throw new Error("Please wait a minute before requesting another code.");
     const code = randomInt(100000, 1000000).toString();
     const expiresAt = Date.now() + OTP_TTL_MS;
 
@@ -79,19 +89,23 @@ export class AuthService {
    */
   async verifyOtp(
     rawEmail: string,
-    rawCode: string
+    rawCode: string,
   ): Promise<{ token: string; user: UserSession }> {
     const email = rawEmail.trim().toLowerCase();
     const code = rawCode.trim();
 
     const entry = otpStore.get(email);
     if (!entry) {
-      throw new Error("No pending verification code found for this email. Please request a new code.");
+      throw new Error(
+        "No pending verification code found for this email. Please request a new code.",
+      );
     }
 
     if (Date.now() > entry.expiresAt) {
       otpStore.delete(email);
-      throw new Error("Verification code has expired. Please request a new code.");
+      throw new Error(
+        "Verification code has expired. Please request a new code.",
+      );
     }
 
     entry.attempts += 1;
@@ -101,7 +115,9 @@ export class AuthService {
     }
 
     if (entry.code !== code) {
-      throw new Error("Invalid verification code. Please check your email and try again.");
+      throw new Error(
+        "Invalid verification code. Please check your email and try again.",
+      );
     }
 
     // Code is valid! Consume it.
@@ -110,7 +126,10 @@ export class AuthService {
     const user: UserSession = {
       id: `usr_${createHash("sha256").update(email).digest("hex")}`,
       email,
-      name: email.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      name: email
+        .split("@")[0]
+        .replace(/[._]/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase()),
       role: "customer",
       businessId: "",
     };
@@ -127,8 +146,16 @@ export class AuthService {
    */
   verifyToken(token: string): UserSession {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as UserSession;
-      if (!decoded.id || !decoded.email || decoded.id !== `usr_${createHash("sha256").update(decoded.email).digest("hex")}`) throw new Error("Invalid identity");
+      const decoded = jwt.verify(token, JWT_SECRET, {
+        algorithms: ["HS256"],
+      }) as UserSession;
+      if (
+        !decoded.id ||
+        !decoded.email ||
+        decoded.id !==
+          `usr_${createHash("sha256").update(decoded.email).digest("hex")}`
+      )
+        throw new Error("Invalid identity");
       return { ...decoded, role: "customer", businessId: "" };
     } catch {
       throw new Error("Invalid or expired session. Please sign in again.");

@@ -1,86 +1,262 @@
 import { getSupabase, isSupabaseConfigured } from "../lib/supabase.js";
 import { HttpError, validateState } from "../domain/workspace.js";
 import type { AppState } from "../domain/model.js";
-export interface Snapshot { state: AppState; revision: number }
-export interface WorkspaceSummary { id: string; name: string; slug: string; role: string }
+export interface Snapshot {
+  state: AppState;
+  revision: number;
+}
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  slug: string;
+  role: string;
+}
 // Isolated in-memory storage is available only in test runs. Missing live storage never becomes a demo.
 const testStore = new Map<string, Snapshot>();
 const testMembers = new Map<string, Set<string>>();
-const testing = () => process.env.NODE_ENV === "test" && !isSupabaseConfigured();
-function db() { if (!isSupabaseConfigured()) throw new HttpError(503, "Workspace storage is not configured"); return getSupabase(); }
-function failure(error: { code?: string; message: string }): never {
-  if (error.code === "23505") throw new HttpError(409, "That booking link is already taken. Choose another.");
-  if (error.code === "40001") throw new HttpError(409, "This workspace changed in another session. Reload before saving again.");
-  console.error("Workspace database error:", error.code);
-  throw new HttpError(503, "Workspace storage is unavailable. Check that the workspace migration has been applied.");
+const testing = () =>
+  process.env.NODE_ENV === "test" && !isSupabaseConfigured();
+
+function db() {
+  if (!isSupabaseConfigured())
+    throw new HttpError(503, "Workspace storage is not configured");
+  return getSupabase();
 }
+
+function failure(error: { code?: string; message: string }): never {
+  if (error.code === "23505")
+    throw new HttpError(
+      409,
+      "That booking link is already taken. Choose another.",
+    );
+
+  if (error.code === "40001")
+    throw new HttpError(
+      409,
+      "This workspace changed in another session. Reload before saving again.",
+    );
+
+  console.error("Workspace database error:", error.code);
+  throw new HttpError(
+    503,
+    "Workspace storage is unavailable. Check that the workspace migration has been applied.",
+  );
+}
+
 export const workspaces = {
   async list(userId: string): Promise<WorkspaceSummary[]> {
-    if (testing()) return [...(testMembers.get(userId) ?? [])].map(id => ({ id, name: testStore.get(id)!.state.business.name, slug: testStore.get(id)!.state.business.slug, role: "owner" }));
-    const { data, error } = await db().from("workspace_members").select("business_id,role,businesses!inner(name,slug)").eq("user_id", userId);
+    if (testing())
+      return [...(testMembers.get(userId) ?? [])].map((id) => ({
+        id,
+        name: testStore.get(id)!.state.business.name,
+        slug: testStore.get(id)!.state.business.slug,
+        role: "owner",
+      }));
+    const { data, error } = await db()
+      .from("workspace_members")
+      .select("business_id,role,businesses!inner(name,slug)")
+      .eq("user_id", userId);
     if (error) failure(error);
-    return (data ?? []).map((row: any) => ({ id: row.business_id, role: row.role, name: row.businesses.name, slug: row.businesses.slug }));
+    return (data ?? []).map((row: any) => ({
+      id: row.business_id,
+      role: row.role,
+      name: row.businesses.name,
+      slug: row.businesses.slug,
+    }));
   },
+
   async authorize(userId: string, workspaceId: string, write = false) {
-    if (testing()) { if (!testMembers.get(userId)?.has(workspaceId)) throw new HttpError(404, "Workspace not found"); return; }
-    const { data, error } = await db().from("workspace_members").select("role").eq("user_id", userId).eq("business_id", workspaceId).maybeSingle();
+    if (testing()) {
+      if (!testMembers.get(userId)?.has(workspaceId))
+        throw new HttpError(404, "Workspace not found");
+      return;
+    }
+
+    const { data, error } = await db()
+      .from("workspace_members")
+      .select("role")
+      .eq("user_id", userId)
+      .eq("business_id", workspaceId)
+      .maybeSingle();
     if (error) failure(error);
     if (!data) throw new HttpError(404, "Workspace not found");
-    if (write && !["owner", "admin"].includes(data.role)) throw new HttpError(403, "Only workspace owners and admins can make this change");
+    if (write && !["owner", "admin"].includes(data.role))
+      throw new HttpError(
+        403,
+        "Only workspace owners and admins can make this change",
+      );
   },
+
   async create(userId: string, state: AppState): Promise<Snapshot> {
     validateState(state, state.business.id);
     if (testing()) {
-      if ([...testStore.values()].some(s => s.state.business.slug === state.business.slug)) throw new HttpError(409, "That booking link is already taken. Choose another.");
-      const result = { state: structuredClone(state), revision: 1 }; testStore.set(state.business.id, result);
-      const memberships = testMembers.get(userId) ?? new Set(); memberships.add(state.business.id); testMembers.set(userId, memberships); return structuredClone(result);
+      if (
+        [...testStore.values()].some(
+          (s) => s.state.business.slug === state.business.slug,
+        )
+      )
+        throw new HttpError(
+          409,
+          "That booking link is already taken. Choose another.",
+        );
+
+      const result = { state: structuredClone(state), revision: 1 };
+      testStore.set(state.business.id, result);
+      const memberships = testMembers.get(userId) ?? new Set();
+      memberships.add(state.business.id);
+      testMembers.set(userId, memberships);
+      return structuredClone(result);
     }
-    const { data, error } = await db().rpc("create_workspace", { p_user: userId, p_state: state });
-    if (error) failure(error); return data;
+
+    const { data, error } = await db().rpc("create_workspace", {
+      p_user: userId,
+      p_state: state,
+    });
+    if (error) failure(error);
+    return data;
   },
+
   async read(id: string): Promise<Snapshot> {
-    if (testing()) { const result = testStore.get(id); if (!result) throw new HttpError(404, "Workspace not found"); return structuredClone(result); }
-    const { data, error } = await db().from("workspace_state").select("state,revision").eq("business_id", id).maybeSingle();
-    if (error) failure(error); if (!data) throw new HttpError(404, "Workspace not found"); return data as Snapshot;
+    if (testing()) {
+      const result = testStore.get(id);
+      if (!result) throw new HttpError(404, "Workspace not found");
+      return structuredClone(result);
+    }
+    const { data, error } = await db()
+      .from("workspace_state")
+      .select("state,revision")
+      .eq("business_id", id)
+      .maybeSingle();
+    if (error) failure(error);
+    if (!data) throw new HttpError(404, "Workspace not found");
+    return data as Snapshot;
   },
   async bySlug(slug: string): Promise<Snapshot> {
-    if (testing()) { const result = [...testStore.values()].find(s => s.state.business.slug === slug); if (!result) throw new HttpError(404, "Business not found"); return structuredClone(result); }
-    const { data, error } = await db().from("businesses").select("id").eq("slug", slug).maybeSingle();
-    if (error) failure(error); if (!data) throw new HttpError(404, "Business not found"); return this.read(data.id);
+    if (testing()) {
+      const result = [...testStore.values()].find(
+        (s) => s.state.business.slug === slug,
+      );
+      if (!result) throw new HttpError(404, "Business not found");
+      return structuredClone(result);
+    }
+    const { data, error } = await db()
+      .from("businesses")
+      .select("id")
+      .eq("slug", slug)
+      .maybeSingle();
+    if (error) failure(error);
+    if (!data) throw new HttpError(404, "Business not found");
+    return this.read(data.id);
   },
   async byCode(code: string): Promise<Snapshot> {
-    if (!/^[A-Z0-9]{12}$/.test(code)) throw new HttpError(404, "Reservation not found");
-    if (testing()) { const result = [...testStore.values()].find(s => s.state.bookings.some(b => b.code === code)); if (!result) throw new HttpError(404, "Reservation not found"); return structuredClone(result); }
-    const { data, error } = await db().from("reservation_links").select("business_id").eq("code", code).maybeSingle();
-    if (error) failure(error); if (!data) throw new HttpError(404, "Reservation not found"); return this.read(data.business_id);
+    if (!/^[A-Z0-9]{12}$/.test(code))
+      throw new HttpError(404, "Reservation not found");
+    if (testing()) {
+      const result = [...testStore.values()].find((s) =>
+        s.state.bookings.some((b) => b.code === code),
+      );
+      if (!result) throw new HttpError(404, "Reservation not found");
+      return structuredClone(result);
+    }
+    const { data, error } = await db()
+      .from("reservation_links")
+      .select("business_id")
+      .eq("code", code)
+      .maybeSingle();
+    if (error) failure(error);
+    if (!data) throw new HttpError(404, "Reservation not found");
+    return this.read(data.business_id);
   },
   async save(id: string, revision: number, input: unknown): Promise<Snapshot> {
     const state = validateState(input, id);
     if (testing()) {
-      const previous = testStore.get(id); if (!previous) throw new HttpError(404, "Workspace not found");
-      if (previous.revision !== revision) throw new HttpError(409, "This workspace changed in another session. Reload before saving again.");
-      if ([...testStore.values()].some(s => s.state.business.id !== id && s.state.business.slug === state.business.slug)) throw new HttpError(409, "That booking link is already taken");
-      const next = { state: structuredClone(state), revision: revision + 1 }; testStore.set(id,next); return structuredClone(next);
+      const previous = testStore.get(id);
+      if (!previous) throw new HttpError(404, "Workspace not found");
+      if (previous.revision !== revision)
+        throw new HttpError(
+          409,
+          "This workspace changed in another session. Reload before saving again.",
+        );
+      if (
+        [...testStore.values()].some(
+          (s) =>
+            s.state.business.id !== id &&
+            s.state.business.slug === state.business.slug,
+        )
+      )
+        throw new HttpError(409, "That booking link is already taken");
+      const next = { state: structuredClone(state), revision: revision + 1 };
+      testStore.set(id, next);
+      return structuredClone(next);
     }
-    const { data, error } = await db().rpc("replace_workspace_state", { p_id: id, p_revision: revision, p_state: state });
-    if (error) failure(error); return data;
+    const { data, error } = await db().rpc("replace_workspace_state", {
+      p_id: id,
+      p_revision: revision,
+      p_state: state,
+    });
+    if (error) failure(error);
+    return data;
   },
+
   async all(): Promise<Snapshot[]> {
     if (testing()) return structuredClone([...testStore.values()]);
-    const { data,error } = await db().from("workspace_state").select("state,revision"); if (error) failure(error); return data as Snapshot[];
+    const { data, error } = await db()
+      .from("workspace_state")
+      .select("state,revision");
+    if (error) failure(error);
+    return data as Snapshot[];
   },
 };
 
 export function publicState(snapshot: Snapshot, code?: string): Snapshot {
   const state = structuredClone(snapshot.state);
-  const booking = code ? state.bookings.find(b => b.code === code) : undefined;
+  const booking = code
+    ? state.bookings.find((b) => b.code === code)
+    : undefined;
   // Availability carries no names, notes, codes, or customer identifiers.
-  const availability = state.bookings.filter(b => !["Cancelled", "Completed"].includes(b.status) && b.id !== booking?.id).map(b => ({ id: b.id, staffId: b.staffId, startTime: b.startTime, endTime: b.endTime, status: b.status }));
-  state.bookings = booking ? [{ ...booking, notes: "", activity: booking.activity.filter(a => a.actor !== "owner").map(a => ({ ...a, detail: undefined })) }] : [];
-  state.customers = booking ? state.customers.filter(c => c.id === booking.customerId).map(c => ({ ...c, notes: "" })) : [];
-  state.payments = booking ? (state.payments ?? []).filter(p => p.bookingId === booking.id).map(p => ({ ...p, receiptId: undefined, receiptName: undefined })) : [];
+  const availability = state.bookings
+    .filter(
+      (b) =>
+        !["Cancelled", "Completed"].includes(b.status) && b.id !== booking?.id,
+    )
+    .map((b) => ({
+      id: b.id,
+      staffId: b.staffId,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      status: b.status,
+    }));
+
+  state.bookings = booking
+    ? [
+        {
+          ...booking,
+          notes: "",
+          activity: booking.activity
+            .filter((a) => a.actor !== "owner")
+            .map((a) => ({ ...a, detail: undefined })),
+        },
+      ]
+    : [];
+
+  state.customers = booking
+    ? state.customers
+        .filter((c) => c.id === booking.customerId)
+        .map((c) => ({ ...c, notes: "" }))
+    : [];
+
+  state.payments = booking
+    ? (state.payments ?? [])
+        .filter((p) => p.bookingId === booking.id)
+        .map((p) => ({ ...p, receiptId: undefined, receiptName: undefined }))
+    : [];
+
   state.agentActivity = [];
   state.settings = { reminders: false, confirmations: false, owner: "" };
   state.business.owner = "";
-  return { state: { ...state, availability } as AppState, revision: snapshot.revision };
+
+  return {
+    state: { ...state, availability } as AppState,
+    revision: snapshot.revision,
+  };
 }

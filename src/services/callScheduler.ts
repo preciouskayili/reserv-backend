@@ -33,7 +33,7 @@ export async function checkAndDispatchReminders(): Promise<CheckRemindersResult>
   // Concurrency lock: prevent multiple overlapping ticks
   if (isJobRunning) {
     console.warn(
-      "[CallScheduler] Previous reminder job is still actively running. Skipping this tick to prevent duplicate calls."
+      "[CallScheduler] Previous reminder job is still actively running. Skipping this tick to prevent duplicate calls.",
     );
     const result: CheckRemindersResult = {
       checked: 0,
@@ -85,19 +85,28 @@ export async function checkAndDispatchReminders(): Promise<CheckRemindersResult>
 
     const reminderMinutes = settings.reminder_minutes || 120;
     const now = new Date();
-    const reminderWindowStart = new Date(now.getTime() + (reminderMinutes - 15) * 60 * 1000);
-    const reminderWindowEnd = new Date(now.getTime() + (reminderMinutes + 15) * 60 * 1000);
+    const reminderWindowStart = new Date(
+      now.getTime() + (reminderMinutes - 15) * 60 * 1000,
+    );
+    const reminderWindowEnd = new Date(
+      now.getTime() + (reminderMinutes + 15) * 60 * 1000,
+    );
 
     // 2. Query bookings within the reminder window that are active
     const { data: bookings, error } = await supabase
       .from("bookings")
-      .select("*, customer:customers(*), service:services(*), business:businesses(*)")
+      .select(
+        "*, customer:customers(*), service:services(*), business:businesses(*)",
+      )
       .in("status", ["Confirmed", "Needs confirmation", "Pending"])
       .gte("start_time", reminderWindowStart.toISOString())
       .lte("start_time", reminderWindowEnd.toISOString());
 
     if (error || !bookings) {
-      console.error("[CallScheduler] Error querying bookings for reminder calls:", error?.message);
+      console.error(
+        "[CallScheduler] Error querying bookings for reminder calls:",
+        error?.message,
+      );
       const result: CheckRemindersResult = {
         checked: 0,
         dispatched: 0,
@@ -127,18 +136,24 @@ export async function checkAndDispatchReminders(): Promise<CheckRemindersResult>
 
       try {
         const toNumber = normalizeE164(customer.phone);
-        const appointmentDate = new Date(booking.start_time).toLocaleDateString("en-US", {
-          weekday: "long",
-          month: "short",
-          day: "numeric",
-        });
-        const appointmentTime = new Date(booking.start_time).toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-        });
+        const appointmentDate = new Date(booking.start_time).toLocaleDateString(
+          "en-US",
+          {
+            weekday: "long",
+            month: "short",
+            day: "numeric",
+          },
+        );
+        const appointmentTime = new Date(booking.start_time).toLocaleTimeString(
+          "en-US",
+          {
+            hour: "numeric",
+            minute: "2-digit",
+          },
+        );
 
         console.log(
-          `[CallScheduler] Dispatching automated reminder call to ${customer.name} (${toNumber}) for booking ${booking.code}`
+          `[CallScheduler] Dispatching automated reminder call to ${customer.name} (${toNumber}) for booking ${booking.code}`,
         );
 
         const callResponse = await aethex.triggerCall({
@@ -183,7 +198,10 @@ export async function checkAndDispatchReminders(): Promise<CheckRemindersResult>
 
         dispatchedCount++;
       } catch (err: any) {
-        console.error(`[CallScheduler] Failed to dispatch reminder for booking ${booking.id}:`, err?.message || err);
+        console.error(
+          `[CallScheduler] Failed to dispatch reminder for booking ${booking.id}:`,
+          err?.message || err,
+        );
       }
     }
 
@@ -198,7 +216,10 @@ export async function checkAndDispatchReminders(): Promise<CheckRemindersResult>
     lastRunStats = { ...result };
     return result;
   } catch (err: any) {
-    console.error("[CallScheduler] Unexpected error during reminder tick:", err);
+    console.error(
+      "[CallScheduler] Unexpected error during reminder tick:",
+      err,
+    );
     const result: CheckRemindersResult = {
       checked: checkedCount,
       dispatched: dispatchedCount,
@@ -220,7 +241,9 @@ export async function checkAndDispatchReminders(): Promise<CheckRemindersResult>
  */
 export function startCallScheduler(customCron?: string): void {
   if (process.env.ENABLE_CALL_SCHEDULER === "false") {
-    console.log("[CallScheduler] Automated reminder scheduler disabled (ENABLE_CALL_SCHEDULER=false)");
+    console.log(
+      "[CallScheduler] Automated reminder scheduler disabled (ENABLE_CALL_SCHEDULER=false)",
+    );
     return;
   }
 
@@ -229,34 +252,47 @@ export function startCallScheduler(customCron?: string): void {
     return;
   }
 
-  const rawExpression = customCron || process.env.CALL_REMINDER_CRON || "*/5 * * * *";
+  const rawExpression =
+    customCron || process.env.CALL_REMINDER_CRON || "*/5 * * * *";
   const isValid = cron.validate(rawExpression);
 
   if (!isValid) {
-    console.warn(`[CallScheduler] Invalid cron expression: "${rawExpression}". Falling back to "*/5 * * * *"`);
+    console.warn(
+      `[CallScheduler] Invalid cron expression: "${rawExpression}". Falling back to "*/5 * * * *"`,
+    );
   }
 
   const cronPattern = isValid ? rawExpression : "*/5 * * * *";
 
-  console.log(`[CallScheduler] Initializing node-cron runner with pattern: "${cronPattern}"`);
+  console.log(
+    `[CallScheduler] Initializing node-cron runner with pattern: "${cronPattern}"`,
+  );
 
   scheduledTask = cron.schedule(cronPattern, async () => {
-    console.log(`[CallScheduler] [${new Date().toISOString()}] Running scheduled booking reminder check...`);
+    console.log(
+      `[CallScheduler] [${new Date().toISOString()}] Running scheduled booking reminder check...`,
+    );
     try {
       const stats = await checkAndDispatchReminders();
       if (!stats.skippedDueToConcurrency) {
         console.log(
-          `[CallScheduler] Cron check finished: ${stats.dispatched} calls dispatched, ${stats.checked} eligible (${stats.durationMs}ms)`
+          `[CallScheduler] Cron check finished: ${stats.dispatched} calls dispatched, ${stats.checked} eligible (${stats.durationMs}ms)`,
         );
       }
     } catch (err: any) {
-      console.error("[CallScheduler] Error during scheduled cron execution:", err?.message || err);
+      console.error(
+        "[CallScheduler] Error during scheduled cron execution:",
+        err?.message || err,
+      );
     }
   });
 
   // Optional background startup scan
   checkAndDispatchReminders().catch((err) => {
-    console.warn("[CallScheduler] Startup initial scan failed:", err?.message || err);
+    console.warn(
+      "[CallScheduler] Startup initial scan failed:",
+      err?.message || err,
+    );
   });
 }
 

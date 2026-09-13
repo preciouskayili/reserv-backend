@@ -80,7 +80,7 @@ export class DatabaseService {
    */
   async updateCall(
     id: string,
-    updates: Partial<CallRecord>
+    updates: Partial<CallRecord>,
   ): Promise<CallRecord | null> {
     if (isSupabaseConfigured()) {
       const supabase = getSupabase();
@@ -100,7 +100,9 @@ export class DatabaseService {
       }
     }
 
-    const idx = memoryCalls.findIndex((c) => c.id === id || c.aethex_call_id === id);
+    const idx = memoryCalls.findIndex(
+      (c) => c.id === id || c.aethex_call_id === id,
+    );
     if (idx !== -1) {
       memoryCalls[idx] = {
         ...memoryCalls[idx],
@@ -131,7 +133,9 @@ export class DatabaseService {
       }
     }
 
-    return memoryCalls.filter(c => c.business_id === businessId).slice(0, limit);
+    return memoryCalls
+      .filter((c) => c.business_id === businessId)
+      .slice(0, limit);
   }
 
   /**
@@ -153,7 +157,13 @@ export class DatabaseService {
       }
     }
 
-    return memoryCalls.find((c) => c.business_id === businessId && (c.id === id || c.aethex_call_id === id)) || null;
+    return (
+      memoryCalls.find(
+        (c) =>
+          c.business_id === businessId &&
+          (c.id === id || c.aethex_call_id === id),
+      ) || null
+    );
   }
 
   /**
@@ -174,7 +184,7 @@ export class DatabaseService {
     }
 
     return memoryCalls.some(
-      (c) => c.booking_id === bookingId && c.call_type === "reminder"
+      (c) => c.booking_id === bookingId && c.call_type === "reminder",
     );
   }
 
@@ -214,8 +224,23 @@ export class DatabaseService {
       if (error) throw new Error(error.message);
       return data;
     }
-    if (memoryBookings.some((existing) => existing.id === booking.id || existing.code === booking.code)) throw new Error("Booking already exists");
-    if (memoryBookings.some((existing) => existing.staff_id === booking.staff_id && existing.status !== "Cancelled" && Date.parse(existing.start_time) < Date.parse(booking.end_time) && Date.parse(existing.end_time) > Date.parse(booking.start_time))) throw new Error("This appointment time is no longer available");
+    if (
+      memoryBookings.some(
+        (existing) =>
+          existing.id === booking.id || existing.code === booking.code,
+      )
+    )
+      throw new Error("Booking already exists");
+    if (
+      memoryBookings.some(
+        (existing) =>
+          existing.staff_id === booking.staff_id &&
+          existing.status !== "Cancelled" &&
+          Date.parse(existing.start_time) < Date.parse(booking.end_time) &&
+          Date.parse(existing.end_time) > Date.parse(booking.start_time),
+      )
+    )
+      throw new Error("This appointment time is no longer available");
     memoryBookings.unshift(booking);
     return booking;
   }
@@ -244,13 +269,19 @@ export class DatabaseService {
       const supabase = getSupabase();
       const { data, error } = await supabase
         .from("bookings")
-        .select("*, customer:customers(*), service:services(*), staff:staff(*), activity:booking_activity(*)")
+        .select(
+          "*, customer:customers(*), service:services(*), staff:staff(*), activity:booking_activity(*)",
+        )
         .or(`id.eq.${identifier},code.eq.${identifier}`)
         .maybeSingle();
       if (error) throw new Error(error.message);
       return data;
     }
-    return memoryBookings.find((b) => b.id === identifier || b.code === identifier) || null;
+    return (
+      memoryBookings.find(
+        (b) => b.id === identifier || b.code === identifier,
+      ) || null
+    );
   }
 
   /**
@@ -268,9 +299,15 @@ export class DatabaseService {
       if (error) throw new Error(error.message);
       return data;
     }
-    const idx = memoryBookings.findIndex((b) => b.id === identifier || b.code === identifier);
+    const idx = memoryBookings.findIndex(
+      (b) => b.id === identifier || b.code === identifier,
+    );
     if (idx !== -1) {
-      memoryBookings[idx] = { ...memoryBookings[idx], ...updates, updated_at: new Date().toISOString() };
+      memoryBookings[idx] = {
+        ...memoryBookings[idx],
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
       return memoryBookings[idx];
     }
     return null;
@@ -278,4 +315,3 @@ export class DatabaseService {
 }
 
 export const db = new DatabaseService();
-
