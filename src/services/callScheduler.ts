@@ -147,6 +147,7 @@ export async function runCallReminders(
     timestamp: new Date(start).toISOString(),
   };
   for (const { state } of await deps.all()) {
+    if (state.business.voice?.status !== "active") continue;
     if (!state.settings.calls?.enabled && !state.settings.calls?.unpaidEnabled)
       continue;
     for (const booking of state.bookings) {
@@ -221,7 +222,10 @@ export async function runCallReminders(
             booking_id: booking.id,
             call_type: type,
           };
+          if (current.business.voice?.status !== "active") continue;
           const call = await deps.trigger({
+            fromNumber: current.business.voice.number,
+            agentId: current.business.voice.agentId,
             toNumber: customer.phone,
             dynamicVariables: {
               business_name: current.business.name,

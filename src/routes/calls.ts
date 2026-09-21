@@ -6,6 +6,7 @@ import { workspaces } from "../services/workspaces.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
+import { businessCallConfig } from "../services/businessVoice.js";
 import { aethex, normalizeE164 } from "../lib/aethex.js";
 import { db, type CallRecord } from "../services/dbService.js";
 import {
@@ -61,7 +62,8 @@ router.post(
         customPromptVariables,
       } = parseResult.data;
 
-      const { state } = await workspaces.read(req.workspaceId!);
+      const snapshot = await workspaces.read(req.workspaceId!);
+      const { state } = snapshot;
       if (bookingId && !state.bookings.some((b) => b.id === bookingId))
         return res.status(404).json({ error: "Reservation not found" });
       const formattedToNumber = normalizeE164(toNumber);
@@ -85,6 +87,7 @@ router.post(
 
       // Dispatch via Aethex Voice AI
       const aethexResponse = await aethex.triggerCall({
+        ...businessCallConfig(snapshot),
         toNumber: formattedToNumber,
         dynamicVariables,
         metadata,

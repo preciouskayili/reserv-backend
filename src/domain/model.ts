@@ -63,9 +63,17 @@ export interface AvailabilityRule {
   maxAdvanceDays: number;
   slotMinutes: number;
 }
+export interface BusinessVoice {
+  country: string;
+  status: "queued" | "provisioning" | "active" | "failed" | "needs_review";
+  number?: string; agentId?: string; twilioSid?: string; aethexNumberId?: string;
+  selectedNumber?: string; purchaseStarted?: boolean; agentStarted?: boolean;
+  lockToken?: string; lockUntil?: string; error?: string;
+}
 export interface Business {
+  voice?: BusinessVoice;
   logoUrl?: string;
-  icon?: "store" | "flower" | "scissors" | "sparkles";
+  icon?: "store" | "factory" | "warehouse" | "office" | "cottage" | "community" | "estate" | "hospital" | "bank" | "pavilion" | "flower" | "scissors" | "sparkles";
   id: string;
   name: string;
   slug: string;

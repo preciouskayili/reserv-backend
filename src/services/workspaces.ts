@@ -11,6 +11,19 @@ export interface WorkspaceSummary {
   slug: string;
   role: string;
 }
+export function syncOwnerProfile(snapshot: Snapshot): Snapshot {
+  const state = structuredClone(snapshot.state);
+  const owner = state.staff.find(member => member.id === state.settings.ownerStaffId)
+    ?? state.staff.find(member => member.role.toLowerCase() === "owner");
+  const name = state.settings.owner.trim() || state.business.owner.trim();
+  if (owner && name) {
+    owner.name = name;
+    owner.initials = name.split(/\s+/).map(part => part[0]).slice(0, 2).join("");
+    state.settings.ownerStaffId = owner.id;
+    state.business.owner = name;
+  }
+  return { ...snapshot, state };
+}
 // Isolated in-memory storage is available only in test runs. Missing live storage never becomes a demo.
 const testStore = new Map<string, Snapshot>();
 const testMembers = new Map<string, Set<string>>();
@@ -160,7 +173,7 @@ export const workspaces = {
       const memberships = testMembers.get(userId) ?? new Set();
       memberships.add(state.business.id);
       testMembers.set(userId, memberships);
-      return structuredClone(result);
+      return syncOwnerProfile(result);
     }
 
     const { data, error } = await db().rpc("create_workspace", {
@@ -175,7 +188,7 @@ export const workspaces = {
     if (testing()) {
       const result = testStore.get(id);
       if (!result) throw new HttpError(404, "Workspace not found");
-      return structuredClone(result);
+      return syncOwnerProfile(result);
     }
     const { data, error } = await db()
       .from("workspace_state")
@@ -184,7 +197,7 @@ export const workspaces = {
       .maybeSingle();
     if (error) failure(error);
     if (!data) throw new HttpError(404, "Workspace not found");
-    return data as Snapshot;
+    return syncOwnerProfile(data as Snapshot);
   },
   async bySlug(slug: string): Promise<Snapshot> {
     if (testing()) {
@@ -192,7 +205,7 @@ export const workspaces = {
         (s) => s.state.business.slug === slug,
       );
       if (!result) throw new HttpError(404, "Business not found");
-      return structuredClone(result);
+      return syncOwnerProfile(result);
     }
     const { data, error } = await db()
       .from("businesses")
@@ -211,7 +224,7 @@ export const workspaces = {
         s.state.bookings.some((b) => b.code === code),
       );
       if (!result) throw new HttpError(404, "Reservation not found");
-      return structuredClone(result);
+      return syncOwnerProfile(result);
     }
     const { data, error } = await db()
       .from("reservation_links")
@@ -264,7 +277,7 @@ export const workspaces = {
 };
 
 export function publicState(snapshot: Snapshot, code?: string): Snapshot {
-  const state = structuredClone(snapshot.state);
+  const state = syncOwnerProfile(snapshot).state;
   const booking = code
     ? state.bookings.find((b) => b.code === code)
     : undefined;
@@ -306,6 +319,10 @@ export function publicState(snapshot: Snapshot, code?: string): Snapshot {
         .map((p) => ({ ...p, receiptId: undefined, receiptName: undefined }))
     : [];
 
+  if (state.business.voice) {
+    const voice = state.business.voice;
+    state.business.voice = { country: voice.country, status: voice.status, number: voice.status === "active" ? voice.number : undefined };
+  }
   state.agentActivity = [];
   state.settings = { reminders: false, confirmations: false, owner: "" };
   state.business.owner = "";

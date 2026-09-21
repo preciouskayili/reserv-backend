@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { startNumberProvisioning, stopNumberProvisioning } from "./services/businessVoice.js";
 import express, { type ErrorRequestHandler } from "express";
 import multer from "multer";
 import cors from "cors";
@@ -143,6 +144,7 @@ const server = app.listen(port, () => {
   console.log(`==============================================\n`);
 
   // Initialize automated background node-cron call runner
+  startNumberProvisioning();
   startCallScheduler();
   startPaymentReconciliation();
 });
@@ -150,6 +152,7 @@ const server = app.listen(port, () => {
 // Graceful shutdown on termination signals
 const handleShutdown = (signal: string) => {
   console.log(`\n[Server] Received ${signal}. Terminating gracefully...`);
+  stopNumberProvisioning();
   stopCallScheduler();
   stopPaymentReconciliation();
   server.close(() => {

@@ -20,6 +20,7 @@ function fixture() {
     duration: 45,
     price: 5000,
   });
+  state.business.voice = { country: "US", status: "active", number: "+18022101485", agentId: "agent" };
   state.settings.calls = {
     enabled: false,
     reminderMinutes: 120,
