@@ -247,41 +247,4 @@ router.get(
   },
 );
 
-/**
- * POST /api/calls/webhook
- * Webhook receiver for Aethex call updates and transcripts
- */
-router.post("/webhook", async (req: Request, res: Response) => {
-  const secret = process.env.AETHEX_WEBHOOK_SECRET;
-  if (!secret || req.headers["x-webhook-secret"] !== secret) {
-    return res.status(401).json({ error: "Invalid webhook credentials" });
-  }
-  try {
-    const event = req.body;
-    const callId = event.call_id || event.id;
-    const status = event.status;
-    const duration = event.duration_seconds;
-    const transcript = event.transcript;
-    const recordingUrl = event.recording_url;
-
-    if (callId) {
-      await db.updateCall(callId, {
-        status: status || undefined,
-        duration_seconds: duration || undefined,
-        transcript: transcript || undefined,
-        recording_url: recordingUrl || undefined,
-      }, "aethex_call_id");
-
-      console.log(
-        `[Aethex Webhook] Updated call ${callId} status to: ${status}`,
-      );
-    }
-
-    return res.json({ received: true });
-  } catch (error) {
-    console.error("[Calls Webhook] Error:", error);
-    return res.status(500).json({ error: "Webhook processing error" });
-  }
-});
-
 export default router;

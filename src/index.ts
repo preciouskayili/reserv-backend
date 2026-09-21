@@ -7,6 +7,7 @@ import morgan from "morgan";
 import compression from "compression";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import uploadRouter from "./routes/upload.js";
+import { callWebhook } from "./routes/callWebhook.js";
 import callsRouter from "./routes/calls.js";
 import { startPaymentReconciliation, stopPaymentReconciliation } from "./payments/reconciliation.js";
 import checkoutRouter, { checkoutWebhooks } from "./routes/checkout.js";
@@ -20,6 +21,7 @@ import { isSupabaseConfigured } from "./lib/supabase.js";
 import { isAethexConfigured } from "./lib/aethex.js";
 import { isResendConfigured } from "./lib/resend.js";
 import {
+  getCallSchedulerStatus,
   startCallScheduler,
   stopCallScheduler,
 } from "./services/callScheduler.js";
@@ -68,6 +70,7 @@ app.use(
 );
 // Signature checks require the original bytes and must precede JSON parsing and browser rate limits.
 app.use("/api/payments/webhooks", checkoutWebhooks);
+app.use("/api/calls/webhook", callWebhook);
 app.use(express.json({ limit: "5mb" }));
 app.use(apiLimiter);
 
@@ -77,12 +80,16 @@ app.get("/health", (_req, res) => {
     status: "ok",
     service: "reserv-backend",
     timestamp: new Date().toISOString(),
+    voice: {
+      fromNumber: process.env.AETHEX_FROM_NUMBER?.trim() || null,
+      automaticCallsEnabled: getCallSchedulerStatus().active,
+    },
     integrations: {
       supabase: isSupabaseConfigured()
         ? "configured"
-        : "demo_mode (env missing)",
-      aethex: isAethexConfigured() ? "configured" : "demo_mode (env missing)",
-      resend: isResendConfigured() ? "configured" : "demo_mode (env missing)",
+        : "not_configured",
+      aethex: isAethexConfigured() ? "configured" : "not_configured",
+      resend: isResendConfigured() ? "configured" : "not_configured",
     },
   });
 });
@@ -125,10 +132,10 @@ const server = app.listen(port, () => {
   console.log(`\n==============================================`);
   console.log(`🚀 Reserv Backend running on http://localhost:${port}`);
   console.log(
-    `   - Supabase DB:  ${isSupabaseConfigured() ? "✅ Configured" : "⚠️  Fallback demo mode"}`,
+    `   - Supabase DB:  ${isSupabaseConfigured() ? "✅ Configured" : "⚠️  Not configured"}`,
   );
   console.log(
-    `   - Aethex Calls: ${isAethexConfigured() ? "✅ Configured" : "⚠️  Simulation demo mode"}`,
+    `   - Aethex Calls: ${isAethexConfigured() ? "✅ Configured" : "⚠️  Not configured"}`,
   );
   console.log(
     `   - Resend OTP:   ${isResendConfigured() ? "✅ Configured" : "⚠️  Simulation console mode"}`,

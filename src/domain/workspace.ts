@@ -11,6 +11,8 @@ export class HttpError extends Error {
   }
 }
 const text = z.string().max(5000);
+const imageUrl = z.string().url().max(2048).refine(value => value.startsWith("https://"), "Choose a secure image URL");
+const businessIcon = z.enum(["store", "flower", "scissors", "sparkles"]);
 const id = z
   .string()
   .min(1)
@@ -29,6 +31,8 @@ const activity = z.object({
 });
 export const stateSchema = z.object({
   business: z.object({
+    logoUrl: imageUrl.optional(),
+    icon: businessIcon.optional(),
     id,
     name: z.string().trim().min(2).max(100),
     slug: z
@@ -73,6 +77,7 @@ export const stateSchema = z.object({
         name: z.string().trim().min(1).max(100),
         role: text,
         initials: z.string().max(10),
+        avatarUrl: imageUrl.optional(),
       }),
     )
     .max(200),
@@ -154,6 +159,7 @@ export const stateSchema = z.object({
     }),
   ),
   settings: z.object({
+    ownerStaffId: id.optional(),
     reminders: z.boolean(),
     confirmations: z.boolean(),
     owner: text,
@@ -225,6 +231,9 @@ export function validateState(input: unknown, workspaceId: string): AppState {
 
 export const onboardingSchema = z
   .object({
+    avatarUrl: imageUrl.optional(),
+    logoUrl: imageUrl.optional(),
+    icon: businessIcon.optional(),
     name: z.string().trim().min(2).max(100),
     slug: z
       .string()
@@ -263,7 +272,9 @@ export function initialState(
     business: {
       id: workspaceId,
       name: data.name,
-      slug,
+      slug: slug.length < 3 ? `${slug}-studio` : slug,
+      logoUrl: data.logoUrl,
+      icon: data.icon ?? "store",
       owner: data.owner,
       category: data.category,
       phone: data.phone,
@@ -292,6 +303,7 @@ export function initialState(
     staff: [
       {
         id: staffId,
+        avatarUrl: data.avatarUrl,
         name: data.owner,
         role: "Owner",
         initials: data.owner
@@ -318,6 +330,7 @@ export function initialState(
     payments: [],
     agentActivity: [],
     settings: {
+      ownerStaffId: staffId,
       reminders: false,
       confirmations: false,
       owner: data.owner,

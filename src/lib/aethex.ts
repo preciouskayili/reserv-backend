@@ -34,7 +34,7 @@ export interface AethexCallResponse {
 }
 
 export const isAethexConfigured = (): boolean => {
-  return Boolean(process.env.AETHEX_API_KEY);
+  return ["AETHEX_API_KEY", "AETHEX_AGENT_ID", "AETHEX_FROM_NUMBER"].every(key => Boolean(process.env[key]?.trim()));
 };
 
 export function normalizeE164(phone: string): string {
@@ -59,9 +59,9 @@ export class AethexClient {
     this.baseUrl =
       process.env.AETHEX_API_BASE_URL?.replace(/\/+$/, "") ||
       "https://api.aethexai.com/api/v1";
-    this.apiKey = process.env.AETHEX_API_KEY;
-    this.defaultAgentId = process.env.AETHEX_AGENT_ID;
-    this.defaultFromNumber = process.env.AETHEX_FROM_NUMBER;
+    this.apiKey = process.env.AETHEX_API_KEY?.trim();
+    this.defaultAgentId = process.env.AETHEX_AGENT_ID?.trim();
+    this.defaultFromNumber = process.env.AETHEX_FROM_NUMBER?.trim();
   }
 
   /**
@@ -72,29 +72,8 @@ export class AethexClient {
     const fromNumber = params.fromNumber || this.defaultFromNumber;
     const toNumber = normalizeE164(params.toNumber);
 
-    if (!isAethexConfigured() || !agentId || !fromNumber) {
-      if (process.env.NODE_ENV === "production") throw new Error("Voice calling is not configured");
-      console.warn(
-        `[Aethex Simulation] Live Aethex credentials missing (API Key: ${Boolean(this.apiKey)}, Agent ID: ${Boolean(agentId)}, From Number: ${Boolean(fromNumber)}). Simulating successful dispatch to ${toNumber}.`
-      );
-
-      const mockId = `sim_call_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      return {
-        id: mockId,
-        agent_id: agentId || "00000000-0000-0000-0000-000000000000",
-        conversation_id: `conv_${mockId}`,
-        call_sid: `CA_mock_${mockId}`,
-        provider: "aethex_simulated",
-        direction: "outbound",
-        from_number: fromNumber || "+14155550000",
-        to_number: toNumber,
-        status: "queued",
-        initiated_via: "api",
-        duration_seconds: null,
-        cost_cents: null,
-        metadata: params.metadata || {},
-        created_at: new Date().toISOString(),
-      };
+    if (!this.apiKey || !agentId || !fromNumber) {
+      throw new Error("Voice calling is not configured. Check the API key, agent, and outbound number.");
     }
 
     const payload = {
@@ -107,6 +86,7 @@ export class AethexClient {
 
     const response = await fetch(`${this.baseUrl}/calls/trigger`, {
       method: "POST",
+      signal: AbortSignal.timeout(20000),
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": this.apiKey!,
@@ -116,16 +96,7 @@ export class AethexClient {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      let errorJson: { message?: string; error?: string } = {};
-      try {
-        errorJson = JSON.parse(errorText);
-      } catch {
-        // Fallback if not json
-      }
-      const message =
-        errorJson.message || errorJson.error || `Aethex call trigger failed with status ${response.status}`;
-      throw new Error(`[Aethex Error ${response.status}] ${message} (${errorText})`);
+      throw new Error(`Voice provider rejected the call (HTTP ${response.status}). Check the agent, phone number, and account balance in Aethex.`);
     }
 
     const data = (await response.json()) as AethexCallResponse;
@@ -136,27 +107,11 @@ export class AethexClient {
    * Retrieves status and details of a call via GET /calls/:id
    */
   async getCall(callId: string): Promise<AethexCallResponse | null> {
-    if (!isAethexConfigured()) {
-      return {
-        id: callId,
-        agent_id: this.defaultAgentId || "simulated-agent",
-        conversation_id: `conv_${callId}`,
-        call_sid: `CA_${callId}`,
-        provider: "aethex_simulated",
-        direction: "outbound",
-        from_number: this.defaultFromNumber || "+14155550000",
-        to_number: "+14155551234",
-        status: "completed",
-        initiated_via: "api",
-        duration_seconds: 48,
-        cost_cents: 8,
-        created_at: new Date(Date.now() - 60000).toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-    }
+    if (!this.apiKey) throw new Error("Voice calling is not configured");
 
     const response = await fetch(`${this.baseUrl}/calls/${callId}`, {
       method: "GET",
+      signal: AbortSignal.timeout(20000),
       headers: {
         "X-API-Key": this.apiKey!,
         Authorization: `Bearer ${this.apiKey!}`,
@@ -192,6 +147,7 @@ export class AethexClient {
 
     const response = await fetch(`${this.baseUrl}/calls?${searchParams.toString()}`, {
       method: "GET",
+      signal: AbortSignal.timeout(20000),
       headers: {
         "X-API-Key": this.apiKey!,
         Authorization: `Bearer ${this.apiKey!}`,

@@ -37,7 +37,7 @@ Before launching, apply the migration in your project and verify a new account c
 - `JWT_SECRET`: a strong random secret of at least 32 characters for session signatures.
 - `RESEND_API_KEY` and `EMAIL_FROM`: email delivery credentials and verified sender for sign-in codes.
 - `AETHEX_API_KEY`, `AETHEX_AGENT_ID`, `AETHEX_FROM_NUMBER`: voice provider access, configured agent and registered outgoing number.
-- `AETHEX_WEBHOOK_SECRET`: shared secret checked on incoming call updates.
+- `AETHEX_WEBHOOK_SECRET`: Aethex tenant signing secret used to verify signed call updates. See [release notes](../LAUNCH.md).
 - `ENABLE_CALL_SCHEDULER`, `CALL_REMINDER_CRON`, `CRON_SECRET`: automatic reminder enablement, schedule and authenticated external trigger.
 - `CLIENT_ORIGIN`: allowed frontend origins; `TRUST_PROXY_HOPS`: your deployment's actual reverse proxy depth.
 - `CLOUDINARY_*`: optional business image asset uploads. Payment receipts use private Supabase Storage.

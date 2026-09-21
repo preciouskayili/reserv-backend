@@ -7,7 +7,7 @@ import { test } from 'node:test';
 // A clean environment ensures tests cannot contact configured email, call or database services.
 test('API protects private routes and validates booking input', async () => {
   const child = spawn(process.execPath, ['dist/index.js'], {
-    env: { PATH: process.env.PATH, NODE_ENV: 'test', PORT: '4198', PAYSTACK_SECRET_KEY: 'sk_test_http_fixture', DOTENV_CONFIG_PATH: '/dev/null', ENABLE_CALL_SCHEDULER: 'false' },
+    env: { PATH: process.env.PATH, NODE_ENV: 'test', PORT: '4198', PAYSTACK_SECRET_KEY: 'sk_test_http_fixture', AETHEX_WEBHOOK_SECRET: 'voice-test-secret', DOTENV_CONFIG_PATH: '/dev/null', ENABLE_CALL_SCHEDULER: 'false' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   try {
@@ -35,6 +35,13 @@ test('API protects private routes and validates booking input', async () => {
     assert.equal(webhook.status,200, 'raw body must reach signature verifier before JSON parsing');
     const tampered = await fetch('http://localhost:4198/api/payments/webhooks/paystack', {method:'POST',headers:{'Content-Type':'application/json','x-paystack-signature':signature},body:raw+' '});
     assert.equal(tampered.status,400);
+    const callRaw = '{ "ignored": true }';
+    const callTimestamp = Math.floor(Date.now() / 1000);
+    const callSignature = createHmac('sha256', 'voice-test-secret').update(`${callTimestamp}.${callRaw}`).digest('hex');
+    const callHeaders = { 'Content-Type': 'application/json', 'x-aethex-event': 'fixture.ignored', 'x-aethex-signature': `t=${callTimestamp},v1=${callSignature}` };
+    assert.equal((await fetch('http://localhost:4198/api/calls/webhook', {method:'POST',headers:callHeaders,body:callRaw})).status,200);
+    assert.equal((await fetch('http://localhost:4198/api/calls/webhook', {method:'POST',headers:callHeaders,body:callRaw+' '})).status,401);
+
     assert.equal((await request('/api/payments/reservation/ABCDEFGHIJKL','POST',{provider:'paystack',choice:'full',email:'test@example.test',idempotencyKey:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',amount:1})).status,400);
 
   } finally {

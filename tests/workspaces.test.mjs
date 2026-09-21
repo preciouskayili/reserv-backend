@@ -27,9 +27,18 @@ test('onboarding, tenant isolation, public privacy and booking conflicts', async
     }
     const a = await account('owner-a@example.test'), b = await account('owner-b@example.test');
     assert.deepEqual((await request('/workspaces', { token: a })).workspaces, []);
-    const details = { name: 'Test studio', slug: 'studio-alpha', owner: 'Owner Alpha', category: 'Beauty', phone: '+2348000000000', address: 'Test address Abuja', serviceName: 'Consultation', duration: 45, price: 5000 };
+    const details = { name: 'Test studio', slug: 'studio-alpha', owner: 'Owner Alpha', category: 'Beauty', phone: '+2348000000000', address: 'Test address Abuja', serviceName: 'Consultation', duration: 45, price: 5000, avatarUrl: 'https://example.test/profile.webp', logoUrl: 'https://example.test/logo.webp', icon: 'flower' };
     const alpha = await request('/workspaces', { token: a, method: 'POST', body: details, status: 201 });
     const beta = await request('/workspaces', { token: b, method: 'POST', body: { ...details, slug: 'studio-beta' }, status: 201 });
+    assert.equal(alpha.state.staff[0].avatarUrl, details.avatarUrl);
+    assert.equal(alpha.state.settings.ownerStaffId, alpha.state.staff[0].id);
+    assert.equal(alpha.state.business.logoUrl, details.logoUrl);
+    assert.equal(alpha.state.business.icon, 'flower');
+    await request('/workspaces', { token: a, method: 'POST', body: { ...details, avatarUrl: 'javascript:alert(1)' }, status: 400 });
+    await request('/upload/image', { method: 'POST', status: 401 });
+    const invalidImage = new FormData(); invalidImage.append('file', new Blob(['not an image'], { type: 'image/png' }), 'fake.png');
+    const invalidImageResult = await fetch('http://localhost:4197/api/upload/image', { method: 'POST', headers: { Authorization: `Bearer ${a}` }, body: invalidImage });
+    assert.equal(invalidImageResult.status, 400);
     const aid = alpha.state.business.id, bid = beta.state.business.id;
     await request(`/workspaces/${bid}/state`, { token: a, status: 404 });
     await request(`/workspaces/${bid}/state`, { token: a, method: 'PUT', body: beta, status: 404 });
@@ -37,6 +46,7 @@ test('onboarding, tenant isolation, public privacy and booking conflicts', async
     assert.equal((await request('/workspaces', { token: a })).workspaces.length, 1);
     const changed = structuredClone(alpha);
     changed.state.business.description = 'Alpha only';
+    changed.state.staff[0].avatarUrl = 'https://example.test/updated.webp';
     const saved = await request(`/workspaces/${aid}/state`, { token: a, method: 'PUT', body: changed });
     await request(`/workspaces/${aid}/state`, { token: a, method: 'PUT', body: changed, status: 409 });
     assert.equal((await request(`/workspaces/${bid}/state`, { token: b })).state.business.description, '');
@@ -47,6 +57,8 @@ test('onboarding, tenant isolation, public privacy and booking conflicts', async
     assert.match(created.booking.code, /^[A-Z0-9]{12}$/);
     await request('/public/businesses/studio-alpha/bookings', { method: 'POST', body: payload, status: 409 });
     const profile = await request('/public/businesses/studio-alpha');
+    assert.equal(profile.state.staff[0].avatarUrl, 'https://example.test/updated.webp');
+    assert.equal(profile.state.business.logoUrl, details.logoUrl);
     assert.deepEqual(profile.state.customers, []);
     assert.deepEqual(profile.state.bookings, []);
     assert.equal(JSON.stringify(profile).includes('Private Customer'), false);
