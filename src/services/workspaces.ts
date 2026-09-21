@@ -51,7 +51,17 @@ function failure(error: { code?: string; message: string }): never {
       "This workspace changed in another session. Reload before saving again.",
     );
 
-  console.error("Workspace database error:", error.code);
+  console.error(
+    "Workspace database error:",
+    error.code || "(no code)",
+    error.message,
+  );
+  // supabase-js reports transport failures with no Postgres error code; the schema is not at fault.
+  if (!error.code)
+    throw new HttpError(
+      503,
+      "Couldn’t reach workspace storage. Check the connection and try again.",
+    );
   throw new HttpError(
     503,
     "Workspace storage is unavailable. Check that the workspace migration has been applied.",
