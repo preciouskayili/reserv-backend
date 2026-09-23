@@ -13,7 +13,7 @@ router.post("/reservation/:code",rateLimit({windowMs:60000,limit:10,standardHead
  const code=String(req.params.code), snapshot=await workspaces.byCode(code), booking=snapshot.state.bookings.find(b=>b.code===code)!;
  if(!isSupabaseConfigured())throw new HttpError(503,"Receipt storage is unavailable");
  if(["Cancelled","Completed"].includes(booking.status))throw new HttpError(409,"This reservation cannot accept payments");
- const payments=snapshot.state.payments??[], records=payments.filter(p=>p.bookingId===booking.id),paid=records.filter(p=>p.status==="approved").reduce((n,p)=>n+p.amount,0),amount=Number(req.body.amount);
+ const payments=snapshot.state.payments??[], records=payments.filter(p=>p.bookingId===booking.id),paid=records.filter(p=>p.status==="approved"&&!p.disputed).reduce((n,p)=>n+Math.max(0,p.amount-(p.refundedAmount??0)),0),amount=Number(req.body.amount);
  if(records.some(p=>p.status==="review")||!Number.isFinite(amount)||amount<=0||amount<(booking.requiredAmount??0)-paid||amount>(booking.totalAmount??0)-paid)throw new HttpError(400,"Check the payment amount or existing receipt review");
  const file=req.file;if(!file||!file.size)throw new HttpError(400,"Choose a receipt file");
  const signatures:Record<string,boolean>={"application/pdf":file.buffer.subarray(0,5).toString()==="%PDF-","image/jpeg":file.buffer[0]===255&&file.buffer[1]===216&&file.buffer[2]===255,"image/png":file.buffer.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),"image/webp":file.buffer.subarray(0,4).toString()==="RIFF"&&file.buffer.subarray(8,12).toString()==="WEBP"};

@@ -430,3 +430,11 @@ GRANT EXECUTE ON FUNCTION public.reserve_checkout(text,text,boolean,text,text,uu
 GRANT EXECUTE ON FUNCTION public.settle_checkout(uuid,text,bigint,text,boolean) TO service_role;
 COMMIT;
 NOTIFY pgrst, 'reload schema';
+
+-- Customers can call a business's number; the voice agent's inbound calls are logged with their own type.
+BEGIN;
+ALTER TABLE public.calls DROP CONSTRAINT IF EXISTS calls_call_type_check;
+ALTER TABLE public.calls ADD CONSTRAINT calls_call_type_check
+  CHECK (call_type IN ('reminder', 'confirmation', 'unpaid_checkin', 'manual', 'inbound'));
+COMMIT;
+NOTIFY pgrst, 'reload schema';

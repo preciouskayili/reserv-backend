@@ -40,6 +40,7 @@ if (process.env.NODE_ENV === "production") {
 const otpStore = new Map<string, OtpEntry>();
 
 export class AuthService {
+  constructor(private sendCode = sendOtpEmail) {}
   /**
    * Generates a 6-digit OTP, stores it, and sends via Resend
    */
@@ -70,7 +71,7 @@ export class AuthService {
 
     let emailResult;
     try {
-      emailResult = await sendOtpEmail(email, code);
+      emailResult = await this.sendCode(email, code);
     } catch (error) {
       otpStore.delete(email);
       if(isSupabaseConfigured())await getSupabase().from("login_challenges").delete().eq("email",email).eq("code_hash",hash);
@@ -82,7 +83,7 @@ export class AuthService {
       simulated: emailResult.simulated,
       email,
       expiresInSeconds: Math.floor(OTP_TTL_MS / 1000),
-      devCode: process.env.NODE_ENV !== "production" ? code : undefined,
+      devCode: process.env.NODE_ENV === "test" && emailResult.simulated && !isSupabaseConfigured() ? code : undefined,
     };
   }
 

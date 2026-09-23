@@ -19,7 +19,7 @@ export interface CallRecord {
     | "no-answer"
     | "busy"
     | "canceled";
-  call_type: "reminder" | "confirmation" | "unpaid_checkin" | "manual";
+  call_type: "reminder" | "confirmation" | "unpaid_checkin" | "manual" | "inbound";
   duration_seconds?: number | null;
   cost_cents?: number | null;
   transcript?: string;
@@ -82,18 +82,19 @@ export class DatabaseService {
     id: string,
     updates: Partial<CallRecord>,
     identifier: "id" | "aethex_call_id" = "id",
+    activeOnly = false,
   ): Promise<CallRecord | null> {
     if (isSupabaseConfigured()) {
       const supabase = getSupabase();
-      const { data, error } = await supabase
+      let query = supabase
         .from("calls")
         .update({
           ...updates,
           updated_at: new Date().toISOString(),
         })
-        .eq(identifier, id)
-        .select()
-        .single();
+        .eq(identifier, id);
+      if (activeOnly) query = query.in("status", ["queued", "ringing", "in-progress", "connected"]);
+      const { data, error } = await query.select().maybeSingle();
 
       if (error) throw new Error(error.message);
       if (data) {
@@ -105,6 +106,7 @@ export class DatabaseService {
       (c) => c.id === id || c.aethex_call_id === id,
     );
     if (idx !== -1) {
+      if (activeOnly && !["queued", "ringing", "in-progress", "connected"].includes(memoryCalls[idx].status)) return memoryCalls[idx];
       memoryCalls[idx] = {
         ...memoryCalls[idx],
         ...updates,

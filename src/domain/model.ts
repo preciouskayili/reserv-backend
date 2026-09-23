@@ -69,6 +69,8 @@ export interface BusinessVoice {
   number?: string; agentId?: string; twilioSid?: string; aethexNumberId?: string;
   selectedNumber?: string; purchaseStarted?: boolean; agentStarted?: boolean;
   lockToken?: string; lockUntil?: string; error?: string;
+  /** Fingerprint of the prompt and tools last applied to the provider agent. */
+  agentConfig?: string;
 }
 export interface Business {
   voice?: BusinessVoice;

@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { getSupabase, isSupabaseConfigured } from "../lib/supabase.js";
 import {
   aethex,
-  isAethexConfigured,
   type AethexTriggerCallParams,
   type AethexCallResponse,
 } from "../lib/aethex.js";
@@ -234,6 +233,7 @@ export async function runCallReminders(
               appointment_date: booking.startTime.slice(0, 10),
               appointment_time: booking.startTime.slice(11, 16),
               call_type: type,
+              booking_code: currentBooking.code,
             },
             metadata,
           });
@@ -254,6 +254,9 @@ export async function runCallReminders(
           result.dispatched++;
         } catch {
           result.failed++;
+          console.error("[Call scheduler] Dispatch or recording failed", {
+            businessId: state.business.id, bookingId: booking.id, type,
+          });
         }
         break; // Never place both a reminder and a payment call for this booking in the same tick.
       }
@@ -273,14 +276,12 @@ export async function checkAndDispatchReminders(): Promise<CheckRemindersResult>
   if (isJobRunning) return { ...result, skippedDueToConcurrency: true };
   if (
     !isSupabaseConfigured() ||
-    !isAethexConfigured() ||
-    !process.env.AETHEX_FROM_NUMBER ||
-    !process.env.AETHEX_AGENT_ID
+    !process.env.AETHEX_API_KEY?.trim()
   ) {
     lastRunStats = {
       ...result,
       error:
-        "Configure storage, the voice agent, and an outbound number before enabling automatic calls.",
+        "Configure storage and the voice API key before enabling automatic calls.",
     };
     return lastRunStats;
   }
@@ -295,6 +296,7 @@ export async function checkAndDispatchReminders(): Promise<CheckRemindersResult>
   } finally {
     isJobRunning = false;
   }
+  console.info("[Call scheduler] Check complete", lastRunStats);
   return lastRunStats!;
 }
 export function startCallScheduler(customCron?: string) {
@@ -305,6 +307,7 @@ export function startCallScheduler(customCron?: string) {
   scheduledTask = cron.schedule(expression, () => {
     void checkAndDispatchReminders();
   });
+  void checkAndDispatchReminders();
 }
 export function stopCallScheduler() {
   scheduledTask?.stop();

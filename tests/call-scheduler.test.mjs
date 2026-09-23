@@ -20,7 +20,12 @@ function fixture() {
     duration: 45,
     price: 5000,
   });
-  state.business.voice = { country: "US", status: "active", number: "+18022101485", agentId: "agent" };
+  state.business.voice = {
+    country: "US",
+    status: "active",
+    number: "+18022101485",
+    agentId: "agent",
+  };
   state.settings.calls = {
     enabled: false,
     reminderMinutes: 120,
@@ -103,7 +108,10 @@ function harness(state) {
     now: () => clock,
     all: async () => [{ state: structuredClone(state) }],
     read: async () => ({ state: structuredClone(state) }),
-    lastDispatch: async () => [...claims.values()].filter(c => c.appointment_time.startsWith('dispatch:')).at(-1) ?? null,
+    lastDispatch: async () =>
+      [...claims.values()]
+        .filter((c) => c.appointment_time.startsWith("dispatch:"))
+        .at(-1) ?? null,
     lastUnpaid: async () =>
       [...claims.values()]
         .filter((c) => c.appointment_time.startsWith("unpaid:"))
@@ -194,10 +202,12 @@ test("a reminder and unpaid call never dispatch together in the same tick", asyn
   assert.equal(h.calls[0].dynamicVariables.call_type, "reminder");
 });
 
-test('concurrent reminder and unpaid workers share a dispatch lock', async () => {
-  const state = fixture(); state.settings.calls.enabled = true;
+test("concurrent reminder and unpaid workers share a dispatch lock", async () => {
+  const state = fixture();
+  state.settings.calls.enabled = true;
   const h = harness(state);
   await Promise.all([runCallReminders(h.deps), runCallReminders(h.deps)]);
   assert.equal(h.calls.length, 1);
-  await runCallReminders(h.deps); assert.equal(h.calls.length, 1);
+  await runCallReminders(h.deps);
+  assert.equal(h.calls.length, 1);
 });

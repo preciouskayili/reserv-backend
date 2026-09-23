@@ -106,12 +106,12 @@ export class AethexClient {
   /**
    * Retrieves status and details of a call via GET /calls/:id
    */
-  async getCall(callId: string): Promise<AethexCallResponse | null> {
+  async getCall(callId: string, timeoutMs = 20000): Promise<AethexCallResponse | null> {
     if (!this.apiKey) throw new Error("Voice calling is not configured");
 
-    const response = await fetch(`${this.baseUrl}/calls/${callId}`, {
+    const response = await fetch(`${this.baseUrl}/calls/${encodeURIComponent(callId)}`, {
       method: "GET",
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         "X-API-Key": this.apiKey!,
         Authorization: `Bearer ${this.apiKey!}`,
@@ -124,6 +124,18 @@ export class AethexClient {
     }
 
     return (await response.json()) as AethexCallResponse;
+  }
+
+  /** Most recent calls across agents; used to match a tool request whose call id differs from the call record id. */
+  async recentCalls(limit = 50, timeoutMs = 20000): Promise<AethexCallResponse[]> {
+    if (!this.apiKey) throw new Error("Voice calling is not configured");
+    const response = await fetch(`${this.baseUrl}/calls?limit=${limit}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { "X-API-Key": this.apiKey, Authorization: `Bearer ${this.apiKey}` },
+    });
+    if (!response.ok) throw new Error(`Failed to list calls from Aethex: ${response.statusText}`);
+    const value = (await response.json()) as { data?: AethexCallResponse[] };
+    return Array.isArray(value.data) ? value.data : [];
   }
 
   /**

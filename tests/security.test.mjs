@@ -19,10 +19,12 @@ test('API protects private routes and validates booking input', async () => {
     const request = (path, method = 'GET', body) => fetch(`http://localhost:4198${path}`, {
       method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
     });
-    for (const [path, method] of [['/api/bookings','GET'], ['/api/bookings/ABC123','GET'], ['/api/bookings/ABC123','PATCH'], ['/api/calls','GET'], ['/api/calls/trigger','POST'], ['/api/calls/example','GET'], ['/api/upload','POST'], ['/api/calls/webhook','POST']]) {
+    for (const [path, method] of [['/api/bookings','GET'], ['/api/bookings/ABC123','GET'], ['/api/bookings/ABC123','PATCH'], ['/api/calls','GET'], ['/api/calls/trigger','POST'], ['/api/calls/example','GET'], ['/api/upload','POST'], ['/api/calls/webhook','POST'], ['/api/voice/tools/abc/get_business_info','POST']]) {
       assert.equal((await request(path, method, method === 'GET' ? undefined : {})).status, 401, `${method} ${path}`);
     }
     assert.equal((await request('/api/bookings', 'POST', {})).status, 401);
+    assert.equal((await request('/api/calls/status')).status, 401);
+    assert.equal((await request('/api/calls/cron/reminders', 'POST', {})).status, 503, 'unconfigured cron must not report success');
     assert.equal((await request('/api/bookings', 'POST', { customerId: 'a', serviceId: 'b', staffId: 'c', startTime: '2026-10-01T12:00:00Z', endTime: '2026-10-01T11:00:00Z' })).status, 401);
     const malformed = await fetch('http://localhost:4198/api/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' });
     assert.equal(malformed.status, 400);
@@ -43,6 +45,10 @@ test('API protects private routes and validates booking input', async () => {
     assert.equal((await fetch('http://localhost:4198/api/calls/webhook', {method:'POST',headers:callHeaders,body:callRaw+' '})).status,401);
 
     assert.equal((await request('/api/payments/reservation/ABCDEFGHIJKL','POST',{provider:'paystack',choice:'full',email:'test@example.test',idempotencyKey:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',amount:1})).status,400);
+
+    for (let i = 0; i < 120; i++) assert.equal((await request('/api/auth/me')).status, 401, 'normal polling must not exhaust the API limit');
+    for (let i = 0; i < 30; i++) assert.equal((await request('/api/auth/otp/send', 'POST', {})).status, 400);
+    assert.equal((await request('/api/auth/otp/send', 'POST', {})).status, 429, 'OTP requests retain a separate abuse limit');
 
   } finally {
     const exited = once(child, 'exit');

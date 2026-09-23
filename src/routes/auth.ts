@@ -1,8 +1,10 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { authService } from "../services/authService.js";
+import { authLimiter } from "../middleware/rateLimit.js";
 
 const router = Router();
+router.use("/otp", authLimiter);
 
 const sendOtpSchema = z.object({
   email: z.string().email("Please enter a valid email address"),

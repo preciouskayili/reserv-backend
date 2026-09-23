@@ -10,6 +10,7 @@ import { apiLimiter } from "./middleware/rateLimit.js";
 import uploadRouter from "./routes/upload.js";
 import { callWebhook } from "./routes/callWebhook.js";
 import callsRouter from "./routes/calls.js";
+import { createVoiceToolRouter } from "./routes/voiceTools.js";
 import { startPaymentReconciliation, stopPaymentReconciliation } from "./payments/reconciliation.js";
 import checkoutRouter, { checkoutWebhooks } from "./routes/checkout.js";
 import receiptRouter from "./routes/receipts.js";
@@ -21,6 +22,8 @@ import authRouter from "./routes/auth.js";
 import { isSupabaseConfigured } from "./lib/supabase.js";
 import { isAethexConfigured } from "./lib/aethex.js";
 import { isResendConfigured } from "./lib/resend.js";
+import { checkProductionConfig } from "./lib/productionConfig.js";
+import { isVoiceToolsConfigured } from "./services/voiceAgent.js";
 import {
   getCallSchedulerStatus,
   startCallScheduler,
@@ -29,6 +32,11 @@ import {
 
 if (process.env.NODE_ENV === "production" && !isSupabaseConfigured())
   throw new Error("Production requires Supabase persistence.");
+if (process.env.NODE_ENV === "production") {
+  const { errors, warnings } = checkProductionConfig(process.env);
+  if (errors.length) throw new Error(errors.join("\n"));
+  for (const warning of warnings) console.warn(`[Configuration] ${warning}`);
+}
 
 const app = express();
 const port = process.env.PORT || 4100;
@@ -73,6 +81,8 @@ app.use(
 app.use("/api/payments/webhooks", checkoutWebhooks);
 app.use("/api/calls/webhook", callWebhook);
 app.use(express.json({ limit: "5mb" }));
+// Voice tools are called by the provider during live calls; they have their own per-business limit.
+app.use("/api/voice/tools", createVoiceToolRouter());
 app.use(apiLimiter);
 
 // Health check with service integration diagnostics
@@ -91,6 +101,7 @@ app.get("/health", (_req, res) => {
         : "not_configured",
       aethex: isAethexConfigured() ? "configured" : "not_configured",
       resend: isResendConfigured() ? "configured" : "not_configured",
+      voiceTools: isVoiceToolsConfigured() ? "configured" : "not_configured",
     },
   });
 });

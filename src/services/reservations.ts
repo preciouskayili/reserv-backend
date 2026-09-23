@@ -2,7 +2,19 @@ import { randomInt, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { HttpError } from "../domain/workspace.js";
 import { workspaces, type Snapshot } from "./workspaces.js";
-import type { Booking } from "../domain/model.js";
+import type { Booking, BookingActivity } from "../domain/model.js";
+import { normalizeE164 } from "../lib/aethex.js";
+
+type Actor = BookingActivity["actor"];
+
+/** Compares numbers regardless of local or international formatting. */
+export function phoneKey(phone: string): string {
+  try {
+    return normalizeE164(phone);
+  } catch {
+    return phone.replace(/[^\d+]/g, "");
+  }
+}
 
 export const bookingInput = z
   .object({
@@ -79,7 +91,11 @@ export function checkSlot(
   return { service, end };
 }
 
-export async function createReservation(snapshot: Snapshot, raw: unknown) {
+export async function createReservation(
+  snapshot: Snapshot,
+  raw: unknown,
+  actor: Actor = "customer",
+) {
   const parsed = bookingInput.safeParse(raw);
   if (!parsed.success)
     throw new HttpError(
@@ -91,10 +107,12 @@ export async function createReservation(snapshot: Snapshot, raw: unknown) {
     { service, end } = checkSlot(snapshot, input),
     state = snapshot.state;
 
-  const phone = input.phone.replace(/[^\d+]/g, "");
+  const phone = phoneKey(input.phone);
 
   let customer = state.customers.find(
-    (c) => c.phone.replace(/[^\d+]/g, "") === phone && c.name === input.name,
+    (c) =>
+      phoneKey(c.phone) === phone &&
+      c.name.trim().toLowerCase() === input.name.toLowerCase(),
   );
 
   // A public caller cannot overwrite an existing customer's profile.
@@ -135,8 +153,9 @@ export async function createReservation(snapshot: Snapshot, raw: unknown) {
       {
         id: randomUUID(),
         title: "Reservation created",
+        ...(actor === "agent" ? { detail: "Booked by phone" } : {}),
         time: new Date().toISOString(),
-        actor: "customer",
+        actor,
       },
     ],
   };
@@ -155,6 +174,7 @@ export async function changeReservation(
   snapshot: Snapshot,
   code: string,
   body: unknown,
+  actor: Actor = "customer",
 ) {
   const schema = z.discriminatedUnion("action", [
     z.object({ action: z.literal("cancel") }).strict(),
@@ -196,8 +216,9 @@ export async function changeReservation(
       input.data.action === "cancel"
         ? "Reservation cancelled"
         : "Reservation rescheduled",
+    ...(actor === "agent" ? { detail: "Changed by phone" } : {}),
     time: new Date().toISOString(),
-    actor: "customer",
+    actor,
   });
 
   return workspaces.save(

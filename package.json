@@ -10,7 +10,8 @@
     "test": "pnpm build && node --test tests/*.test.mjs",
     "test:payments:db": "node scripts/test-checkout-db.mjs",
     "aethex:check": "node scripts/setup-aethex-number.mjs",
-    "aethex:register": "node scripts/setup-aethex-number.mjs --register"
+    "aethex:register": "node scripts/setup-aethex-number.mjs --register",
+    "check:production": "pnpm build && node scripts/check-production.mjs"
   },
   "keywords": [],
   "author": "",
@@ -18,7 +19,7 @@
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "^11.9.0",
+      "version": "11.9.0",
       "onFail": "download"
     }
   },
@@ -51,5 +52,6 @@
     "@types/node-cron": "^3.0.11",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"
-  }
+  },
+  "packageManager": "pnpm@11.9.0"
 }

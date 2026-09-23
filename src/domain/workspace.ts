@@ -11,8 +11,26 @@ export class HttpError extends Error {
   }
 }
 const text = z.string().max(5000);
-const imageUrl = z.string().url().max(2048).refine(value => value.startsWith("https://"), "Choose a secure image URL");
-const businessIcon = z.enum(["store", "factory", "warehouse", "office", "cottage", "community", "estate", "hospital", "bank", "pavilion", "flower", "scissors", "sparkles"]);
+const imageUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((value) => value.startsWith("https://"), "Choose a secure image URL");
+const businessIcon = z.enum([
+  "store",
+  "factory",
+  "warehouse",
+  "office",
+  "cottage",
+  "community",
+  "estate",
+  "hospital",
+  "bank",
+  "pavilion",
+  "flower",
+  "scissors",
+  "sparkles",
+]);
 const id = z
   .string()
   .min(1)
@@ -31,12 +49,29 @@ const activity = z.object({
 });
 export const stateSchema = z.object({
   business: z.object({
-    voice: z.object({
-      country: z.string().regex(/^[A-Z]{2}$/), status: z.enum(["queued", "provisioning", "active", "failed", "needs_review"]),
-      number: text.optional(), agentId: text.optional(), twilioSid: text.optional(), aethexNumberId: text.optional(),
-      selectedNumber: text.optional(), purchaseStarted: z.boolean().optional(), agentStarted: z.boolean().optional(),
-      lockToken: text.optional(), lockUntil: timestamp.optional(), error: text.optional(),
-    }).optional(),
+    voice: z
+      .object({
+        country: z.string().regex(/^[A-Z]{2}$/),
+        status: z.enum([
+          "queued",
+          "provisioning",
+          "active",
+          "failed",
+          "needs_review",
+        ]),
+        number: text.optional(),
+        agentId: text.optional(),
+        twilioSid: text.optional(),
+        aethexNumberId: text.optional(),
+        selectedNumber: text.optional(),
+        purchaseStarted: z.boolean().optional(),
+        agentStarted: z.boolean().optional(),
+        lockToken: text.optional(),
+        lockUntil: timestamp.optional(),
+        error: text.optional(),
+        agentConfig: z.string().max(64).optional(),
+      })
+      .optional(),
     logoUrl: imageUrl.optional(),
     icon: businessIcon.optional(),
     id,
@@ -237,7 +272,10 @@ export function validateState(input: unknown, workspaceId: string): AppState {
 
 export const onboardingSchema = z
   .object({
-    voiceCountry: z.string().regex(/^[A-Z]{2}$/).optional(),
+    voiceCountry: z
+      .string()
+      .regex(/^[A-Z]{2}$/)
+      .optional(),
     avatarUrl: imageUrl.optional(),
     logoUrl: imageUrl.optional(),
     icon: businessIcon.optional(),
@@ -279,7 +317,9 @@ export function initialState(
     business: {
       id: workspaceId,
       name: data.name,
-      voice: data.voiceCountry ? { country: data.voiceCountry, status: "queued" } : undefined,
+      voice: data.voiceCountry
+        ? { country: data.voiceCountry, status: "queued" }
+        : undefined,
       slug: slug.length < 3 ? `${slug}-studio` : slug,
       logoUrl: data.logoUrl,
       icon: data.icon ?? "store",

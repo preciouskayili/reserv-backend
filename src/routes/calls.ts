@@ -6,7 +6,10 @@ import { workspaces } from "../services/workspaces.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
+import { rateLimit } from "express-rate-limit";
 import { businessCallConfig } from "../services/businessVoice.js";
+import { HttpError } from "../domain/workspace.js";
+import { refreshCallStatus, refreshCallList } from "../services/callStatus.js";
 import { aethex, normalizeE164 } from "../lib/aethex.js";
 import { db, type CallRecord } from "../services/dbService.js";
 import {
@@ -15,6 +18,18 @@ import {
 } from "../services/callScheduler.js";
 
 const router = Router();
+
+router.get("/status", requireAuth, requireWorkspace, async (req: WorkspaceRequest, res) => {
+  const { state } = await workspaces.read(req.workspaceId!);
+  const scheduler = getCallSchedulerStatus();
+  const voice = state.business.voice;
+  const phoneReady = voice?.status === "active" && !!voice.number && !!voice.agentId;
+  res.json({
+    available: phoneReady && scheduler.active && !!process.env.AETHEX_API_KEY?.trim() && !scheduler.lastRunStats?.error,
+    phoneReady,
+    lastCheckedAt: scheduler.lastRunTimestamp,
+  });
+});
 
 const triggerCallSchema = z.object({
   bookingId: z.string().optional(),
@@ -40,6 +55,7 @@ router.post(
   "/trigger",
   requireAuth,
   requireWorkspace,
+  rateLimit({ windowMs: 60000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many call requests. Please wait a minute." } }),
   async (req: WorkspaceRequest, res: Response) => {
     try {
       const parseResult = triggerCallSchema.safeParse(req.body);
@@ -64,18 +80,20 @@ router.post(
 
       const snapshot = await workspaces.read(req.workspaceId!);
       const { state } = snapshot;
-      if (bookingId && !state.bookings.some((b) => b.id === bookingId))
+      const booking = bookingId ? state.bookings.find((b) => b.id === bookingId) : undefined;
+      if (bookingId && !booking)
         return res.status(404).json({ error: "Reservation not found" });
       const formattedToNumber = normalizeE164(toNumber);
 
       const dynamicVariables: Record<string, string | number | boolean> = {
+        ...customPromptVariables,
         customer_name: customerName || "there",
         business_name: state.business.name,
         service_name: serviceName || "your upcoming appointment",
         appointment_date: appointmentDate || "today",
         appointment_time: appointmentTime || "your scheduled time",
         call_type: callType,
-        ...customPromptVariables,
+        booking_code: booking?.code ?? "not provided",
       };
 
       const metadata: Record<string, unknown> = {
@@ -119,7 +137,7 @@ router.post(
       });
     } catch (error) {
       console.error("[Calls API] Trigger error:", error);
-      return res.status(500).json({
+      return res.status(error instanceof HttpError ? error.status : 500).json({
         error: "Failed to dispatch call",
         message: error instanceof Error ? error.message : "Unknown error",
       });
@@ -138,7 +156,8 @@ router.get(
   async (req: WorkspaceRequest, res: Response) => {
     try {
       const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-      const calls = await db.listCalls(limit, req.workspaceId!);
+      const stored = await db.listCalls(limit, req.workspaceId!);
+      const calls = await refreshCallList(stored);
       return res.json({ calls, total: calls.length });
     } catch (error) {
       console.error("[Calls API] List error:", error);
@@ -175,8 +194,8 @@ router.post("/cron/reminders", async (req: Request, res: Response) => {
 
   try {
     const result = await checkAndDispatchReminders();
-    return res.json({
-      success: true,
+    return res.status(result.error || result.failed ? 503 : 200).json({
+      success: !result.error && result.failed === 0,
       ...result,
     });
   } catch (error: any) {
@@ -222,27 +241,7 @@ router.get(
         return res.status(404).json({ error: "Call not found" });
       }
 
-      // Refresh live status from Aethex if in-progress or queued
-      if (
-        call.aethex_call_id &&
-        ["queued", "ringing", "in-progress"].includes(call.status)
-      ) {
-        try {
-          const liveStatus = await aethex.getCall(call.aethex_call_id);
-          if (liveStatus && liveStatus.status !== call.status) {
-            const updated = await db.updateCall(call.id, {
-              status: liveStatus.status,
-              duration_seconds: liveStatus.duration_seconds,
-              cost_cents: liveStatus.cost_cents,
-            });
-            return res.json({ call: updated || call });
-          }
-        } catch {
-          // Fall back to stored state
-        }
-      }
-
-      return res.json({ call });
+      return res.json({ call: await refreshCallStatus(call) });
     } catch (error) {
       console.error("[Calls API] Get error:", error);
       return res.status(500).json({ error: "Failed to fetch call" });
