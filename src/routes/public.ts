@@ -5,7 +5,9 @@ import {
   createReservation,
   changeReservation,
 } from "../services/reservations.js";
+
 const router = Router();
+
 router.use(
   rateLimit({
     windowMs: 60000,
@@ -14,6 +16,7 @@ router.use(
     legacyHeaders: false,
   }),
 );
+
 router.get("/reservations/:code", async (req, res) =>
   res.json(
     publicState(
@@ -22,6 +25,7 @@ router.get("/reservations/:code", async (req, res) =>
     ),
   ),
 );
+
 router.patch("/reservations/:code", async (req, res) => {
   const code = String(req.params.code);
   res.json(
@@ -31,13 +35,16 @@ router.patch("/reservations/:code", async (req, res) => {
     ),
   );
 });
+
 router.get("/check-slug", async (req, res) => {
   const slug = String(req.query.slug ?? "");
   res.json(await workspaces.checkSlug(slug));
 });
+
 router.get("/businesses/:slug", async (req, res) =>
   res.json(publicState(await workspaces.bySlug(String(req.params.slug)))),
 );
+
 router.post("/businesses/:slug/bookings", async (req, res) => {
   const { snapshot, booking } = await createReservation(
     await workspaces.bySlug(String(req.params.slug)),

@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { numberCountries, requestBusinessNumber, provisionBusinessNumber, publicVoice } from "../services/businessVoice.js";
+import {
+  numberCountries,
+  requestBusinessNumber,
+  provisionBusinessNumber,
+  publicVoice,
+} from "../services/businessVoice.js";
 import { Router } from "express";
 import {
   requireAuth,
@@ -20,17 +25,29 @@ router.get("/check-slug", async (req: AuthenticatedRequest, res) => {
   const slug = String(req.query.slug ?? "");
   res.json(await workspaces.checkSlug(slug));
 });
-router.get("/voice/countries", async (_req, res) => res.json({ countries: await numberCountries() }));
+router.get("/voice/countries", async (_req, res) =>
+  res.json({ countries: await numberCountries() }),
+);
 router.get("/:id/voice", async (req: AuthenticatedRequest, res) => {
-  const id = String(req.params.id); await workspaces.authorize(req.user!.id, id);
-  res.json({ voice: publicVoice((await workspaces.read(id)).state.business.voice) });
+  const id = String(req.params.id);
+  await workspaces.authorize(req.user!.id, id);
+  res.json({
+    voice: publicVoice((await workspaces.read(id)).state.business.voice),
+  });
 });
 router.post("/:id/voice", async (req: AuthenticatedRequest, res) => {
-  const id = String(req.params.id); await workspaces.authorize(req.user!.id, id, true);
-  const country = z.string().regex(/^[A-Z]{2}$/).safeParse(req.body.country);
-  if (!country.success) throw new HttpError(400, "Choose a phone-number country.");
+  const id = String(req.params.id);
+  await workspaces.authorize(req.user!.id, id, true);
+  const country = z
+    .string()
+    .regex(/^[A-Z]{2}$/)
+    .safeParse(req.body.country);
+  if (!country.success)
+    throw new HttpError(400, "Choose a phone-number country.");
   const snapshot = await requestBusinessNumber(id, country.data);
-  void provisionBusinessNumber(id).catch(() => console.error("Business phone setup needs review", id));
+  void provisionBusinessNumber(id).catch(() =>
+    console.error("Business phone setup needs review", id),
+  );
   res.status(202).json({ voice: publicVoice(snapshot.state.business.voice) });
 });
 router.post("/", async (req: AuthenticatedRequest, res) => {
@@ -40,18 +57,31 @@ router.post("/", async (req: AuthenticatedRequest, res) => {
       400,
       parsed.error.issues[0]?.message || "Check your business details",
     );
-  if (parsed.data.voiceCountry && !(await numberCountries()).some(country => country.code === parsed.data.voiceCountry))
+  if (
+    parsed.data.voiceCountry &&
+    !(await numberCountries()).some(
+      (country) => country.code === parsed.data.voiceCountry,
+    )
+  )
     throw new HttpError(400, "Choose a supported phone-number country.");
   const state = initialState(parsed.data);
   const result = await workspaces.create(req.user!.id, state);
-  if (parsed.data.voiceCountry) void provisionBusinessNumber(result.state.business.id).catch(() => console.error("Business phone setup needs review", result.state.business.id));
+  if (parsed.data.voiceCountry)
+    void provisionBusinessNumber(result.state.business.id).catch(() =>
+      console.error(
+        "Business phone setup needs review",
+        result.state.business.id,
+      ),
+    );
   res.status(201).json(result);
 });
+
 router.get("/:id/state", async (req: AuthenticatedRequest, res) => {
   const id = String(req.params.id);
   await workspaces.authorize(req.user!.id, id);
   res.json(await workspaces.read(id));
 });
+
 router.put("/:id/state", async (req: AuthenticatedRequest, res) => {
   const id = String(req.params.id);
   await workspaces.authorize(req.user!.id, id, true);
@@ -59,7 +89,8 @@ router.put("/:id/state", async (req: AuthenticatedRequest, res) => {
     throw new HttpError(400, "A workspace revision is required");
   const previous = await workspaces.read(id);
   // Phone assignments are controlled by the provisioning service, never by workspace JSON from a client.
-  if (req.body.state?.business) req.body.state.business.voice = previous.state.business.voice;
+  if (req.body.state?.business)
+    req.body.state.business.voice = previous.state.business.voice;
   // Payments cannot be invented or converted into gateway successes by the workspace editor.
   const oldPayments = new Map(
     (previous.state.payments ?? []).map((p) => [p.id, p]),

@@ -34,6 +34,7 @@ const ended = z.object({
   to_number: z.string().max(40).optional(),
   started_at: z.string().max(40).optional(),
 });
+
 const recording = z.object({
   call_id: z.string().min(1).max(100),
   audio_url: z
@@ -41,16 +42,28 @@ const recording = z.object({
     .url()
     .refine((value) => value.startsWith("https://")),
 });
+
 export function callEventUpdate(
   event: string | undefined,
   body: unknown,
-): { id: string; updates: Partial<CallRecord>; inbound?: { agentId: string; from: string; to: string; startedAt?: string } } | null {
+): {
+  id: string;
+  updates: Partial<CallRecord>;
+  inbound?: { agentId: string; from: string; to: string; startedAt?: string };
+} | null {
   if (event === "call.ended") {
     const value = ended.parse(body);
     return {
       id: value.call_id,
       ...(value.direction === "inbound" && value.agent_id
-        ? { inbound: { agentId: value.agent_id, from: value.from_number ?? "", to: value.to_number ?? "", startedAt: value.started_at } }
+        ? {
+            inbound: {
+              agentId: value.agent_id,
+              from: value.from_number ?? "",
+              to: value.to_number ?? "",
+              startedAt: value.started_at,
+            },
+          }
         : {}),
       updates: {
         status: value.status,
@@ -73,7 +86,8 @@ async function businessForAgent(agentId: string): Promise<string | undefined> {
   const cached = agentBusinesses.get(agentId);
   if (cached) return cached;
   for (const { state } of await workspaces.all()) {
-    if (state.business.voice?.agentId) agentBusinesses.set(state.business.voice.agentId, state.business.id);
+    if (state.business.voice?.agentId)
+      agentBusinesses.set(state.business.voice.agentId, state.business.id);
   }
   return agentBusinesses.get(agentId);
 }
@@ -87,21 +101,36 @@ async function recordInboundCall(
   if (!inbound) return false;
   const businessId = await businessForAgent(inbound.agentId);
   if (!businessId) return false;
-  const startedAt = inbound.startedAt && Number.isFinite(Date.parse(inbound.startedAt)) ? new Date(inbound.startedAt).toISOString() : new Date().toISOString();
+  const startedAt =
+    inbound.startedAt && Number.isFinite(Date.parse(inbound.startedAt))
+      ? new Date(inbound.startedAt).toISOString()
+      : new Date().toISOString();
   try {
     await db.createCall({
       // A deterministic id makes redelivered events idempotent.
-      id: `inbound:${id}`, business_id: businessId, booking_id: null, aethex_call_id: id, agent_id: inbound.agentId,
-      direction: "inbound", from_number: inbound.from, to_number: inbound.to, status: "completed", call_type: "inbound",
-      metadata: {}, created_at: startedAt, ...updates,
+      id: `inbound:${id}`,
+      business_id: businessId,
+      booking_id: null,
+      aethex_call_id: id,
+      agent_id: inbound.agentId,
+      direction: "inbound",
+      from_number: inbound.from,
+      to_number: inbound.to,
+      status: "completed",
+      call_type: "inbound",
+      metadata: {},
+      created_at: startedAt,
+      ...updates,
     });
   } catch (error) {
-    if (!(error instanceof Error && /duplicate key/i.test(error.message))) throw error;
+    if (!(error instanceof Error && /duplicate key/i.test(error.message)))
+      throw error;
   }
   return true;
 }
 
 export const callWebhook = Router();
+
 callWebhook.post(
   "/",
   raw({ type: "application/json", limit: "2mb" }),
@@ -133,7 +162,10 @@ callWebhook.post(
         "aethex_call_id",
       );
       // Ask for a retry if the event raced the initial call record insert.
-      if (!saved && (await recordInboundCall(update.id, update.updates, update.inbound)))
+      if (
+        !saved &&
+        (await recordInboundCall(update.id, update.updates, update.inbound))
+      )
         return res.json({ received: true });
       if (!saved)
         return res.status(503).json({ error: "Call record not available yet" });

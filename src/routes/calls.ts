@@ -11,7 +11,11 @@ import { businessCallConfig } from "../services/businessVoice.js";
 import { HttpError } from "../domain/workspace.js";
 import { refreshCallStatus, refreshCallList } from "../services/callStatus.js";
 import { aethex, normalizeE164 } from "../lib/aethex.js";
-import { bookingCallContext, callsBlocked, outboundOpening } from "../services/callContext.js";
+import {
+  bookingCallContext,
+  callsBlocked,
+  outboundOpening,
+} from "../services/callContext.js";
 import { db, type CallRecord } from "../services/dbService.js";
 import {
   checkAndDispatchReminders,
@@ -20,17 +24,27 @@ import {
 
 const router = Router();
 
-router.get("/status", requireAuth, requireWorkspace, async (req: WorkspaceRequest, res) => {
-  const { state } = await workspaces.read(req.workspaceId!);
-  const scheduler = getCallSchedulerStatus();
-  const voice = state.business.voice;
-  const phoneReady = voice?.status === "active" && !!voice.number && !!voice.agentId;
-  res.json({
-    available: phoneReady && scheduler.active && !!process.env.AETHEX_API_KEY?.trim() && !scheduler.lastRunStats?.error,
-    phoneReady,
-    lastCheckedAt: scheduler.lastRunTimestamp,
-  });
-});
+router.get(
+  "/status",
+  requireAuth,
+  requireWorkspace,
+  async (req: WorkspaceRequest, res) => {
+    const { state } = await workspaces.read(req.workspaceId!);
+    const scheduler = getCallSchedulerStatus();
+    const voice = state.business.voice;
+    const phoneReady =
+      voice?.status === "active" && !!voice.number && !!voice.agentId;
+    res.json({
+      available:
+        phoneReady &&
+        scheduler.active &&
+        !!process.env.AETHEX_API_KEY?.trim() &&
+        !scheduler.lastRunStats?.error,
+      phoneReady,
+      lastCheckedAt: scheduler.lastRunTimestamp,
+    });
+  },
+);
 
 const triggerCallSchema = z.object({
   bookingId: z.string().optional(),
@@ -54,7 +68,13 @@ router.post(
   "/trigger",
   requireAuth,
   requireWorkspace,
-  rateLimit({ windowMs: 60000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many call requests. Please wait a minute." } }),
+  rateLimit({
+    windowMs: 60000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many call requests. Please wait a minute." },
+  }),
   async (req: WorkspaceRequest, res: Response) => {
     try {
       const parseResult = triggerCallSchema.safeParse(req.body);
@@ -78,30 +98,61 @@ router.post(
 
       const snapshot = await workspaces.read(req.workspaceId!);
       const { state } = snapshot;
-      const booking = bookingId ? state.bookings.find((b) => b.id === bookingId) : undefined;
+      const booking = bookingId
+        ? state.bookings.find((b) => b.id === bookingId)
+        : undefined;
       if (bookingId && !booking)
         return res.status(404).json({ error: "Reservation not found" });
       let formattedToNumber: string;
-      try { formattedToNumber = normalizeE164(toNumber); }
-      catch { throw new HttpError(400, "Enter a valid phone number with its country code."); }
-      if (testCall && booking) throw new HttpError(400, "Test calls cannot be linked to a real reservation.");
+      try {
+        formattedToNumber = normalizeE164(toNumber);
+      } catch {
+        throw new HttpError(
+          400,
+          "Enter a valid phone number with its country code.",
+        );
+      }
+      if (testCall && booking)
+        throw new HttpError(
+          400,
+          "Test calls cannot be linked to a real reservation.",
+        );
       if (!booking && !testCall && callType !== "manual")
-        throw new HttpError(400, "Choose a reservation for a reminder, confirmation or payment call.");
-      if (callsBlocked(state, formattedToNumber)) throw new HttpError(409, "This customer has asked not to receive calls.");
-      const context = booking ? bookingCallContext(state, booking, callType) : undefined;
+        throw new HttpError(
+          400,
+          "Choose a reservation for a reminder, confirmation or payment call.",
+        );
+      if (callsBlocked(state, formattedToNumber))
+        throw new HttpError(
+          409,
+          "This customer has asked not to receive calls.",
+        );
+      const context = booking
+        ? bookingCallContext(state, booking, callType)
+        : undefined;
       if (context && context.toNumber !== formattedToNumber)
-        throw new HttpError(409, "The customer's phone number changed. Refresh the reservation before calling.");
-      const dynamicVariables: Record<string, string | number | boolean> = context?.dynamicVariables ?? {
-        opening_message: outboundOpening(state.business.name, customerName),
-        customer_name: customerName?.trim() || "not provided",
-        business_name: state.business.name,
-        service_name: testCall ? serviceName?.trim() || "example service" : "not provided",
-        appointment_date: testCall ? appointmentDate?.trim() || "not provided" : "not provided",
-        appointment_time: testCall ? appointmentTime?.trim() || "not provided" : "not provided",
-        call_type: callType,
-        booking_code: "not provided",
-        test_call: testCall,
-      };
+        throw new HttpError(
+          409,
+          "The customer's phone number changed. Refresh the reservation before calling.",
+        );
+      const dynamicVariables: Record<string, string | number | boolean> =
+        context?.dynamicVariables ?? {
+          opening_message: outboundOpening(state.business.name, customerName),
+          customer_name: customerName?.trim() || "not provided",
+          business_name: state.business.name,
+          service_name: testCall
+            ? serviceName?.trim() || "example service"
+            : "not provided",
+          appointment_date: testCall
+            ? appointmentDate?.trim() || "not provided"
+            : "not provided",
+          appointment_time: testCall
+            ? appointmentTime?.trim() || "not provided"
+            : "not provided",
+          call_type: callType,
+          booking_code: "not provided",
+          test_call: testCall,
+        };
 
       const metadata: Record<string, unknown> = {
         business_id: req.workspaceId,
@@ -139,18 +190,33 @@ router.post(
       // Once the provider accepts the call, a history outage must not invite a second dial.
       let savedCall = callRecord;
       let historySaved = false;
-      try { savedCall = await db.createCall(callRecord); historySaved = true; }
-      catch { console.error("[Calls API] Accepted call could not be recorded", { businessId: req.workspaceId, callId: aethexResponse.id }); }
+      try {
+        savedCall = await db.createCall(callRecord);
+        historySaved = true;
+      } catch {
+        console.error("[Calls API] Accepted call could not be recorded", {
+          businessId: req.workspaceId,
+          callId: aethexResponse.id,
+        });
+      }
 
       return res.status(202).json({
-        message: historySaved ? "Call queued successfully" : "Call queued. Call history could not be saved; do not place it again.",
+        message: historySaved
+          ? "Call queued successfully"
+          : "Call queued. Call history could not be saved; do not place it again.",
         call: savedCall,
         aethex_call_id: aethexResponse.id,
       });
     } catch (error) {
       console.error("[Calls API] Trigger error:", error);
-      if (error instanceof Error && ["TimeoutError", "AbortError", "TypeError"].includes(error.name))
-        return res.status(503).json({ error: "The call request could not be confirmed. Check call history before placing another call." });
+      if (
+        error instanceof Error &&
+        ["TimeoutError", "AbortError", "TypeError"].includes(error.name)
+      )
+        return res.status(503).json({
+          error:
+            "The call request could not be confirmed. Check call history before placing another call.",
+        });
       return res.status(error instanceof HttpError ? error.status : 500).json({
         error: "Failed to dispatch call",
         message: error instanceof Error ? error.message : "Unknown error",

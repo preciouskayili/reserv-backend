@@ -1,5 +1,8 @@
 import "dotenv/config";
-import { startNumberProvisioning, stopNumberProvisioning } from "./services/businessVoice.js";
+import {
+  startNumberProvisioning,
+  stopNumberProvisioning,
+} from "./services/businessVoice.js";
 import express, { type ErrorRequestHandler } from "express";
 import multer from "multer";
 import cors from "cors";
@@ -11,7 +14,10 @@ import uploadRouter from "./routes/upload.js";
 import { callWebhook } from "./routes/callWebhook.js";
 import callsRouter from "./routes/calls.js";
 import { createVoiceToolRouter } from "./routes/voiceTools.js";
-import { startPaymentReconciliation, stopPaymentReconciliation } from "./payments/reconciliation.js";
+import {
+  startPaymentReconciliation,
+  stopPaymentReconciliation,
+} from "./payments/reconciliation.js";
 import checkoutRouter, { checkoutWebhooks } from "./routes/checkout.js";
 import receiptRouter from "./routes/receipts.js";
 import publicRouter from "./routes/public.js";
@@ -68,7 +74,10 @@ app.use(
       const allowed = getAllowedOrigins();
 
       // Support wildcard if explicitly set in .env
-      if ((process.env.NODE_ENV !== "production" && allowed.includes("*")) || allowed.includes(origin)) {
+      if (
+        (process.env.NODE_ENV !== "production" && allowed.includes("*")) ||
+        allowed.includes(origin)
+      ) {
         return callback(null, true);
       }
 
@@ -97,9 +106,7 @@ app.get("/health", (_req, res) => {
       automaticCallsEnabled: getCallSchedulerStatus().active,
     },
     integrations: {
-      supabase: isSupabaseConfigured()
-        ? "configured"
-        : "not_configured",
+      supabase: isSupabaseConfigured() ? "configured" : "not_configured",
       aethex: isAethexConfigured() ? "configured" : "not_configured",
       resend: isResendConfigured() ? "configured" : "not_configured",
       voiceTools: isVoiceToolsConfigured() ? "configured" : "not_configured",
