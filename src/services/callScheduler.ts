@@ -9,6 +9,7 @@ import {
 import { workspaces } from "./workspaces.js";
 import { db, type CallRecord } from "./dbService.js";
 import type { AppState, Booking } from "../domain/model.js";
+import { appointmentTimestamp, bookingCallContext, callsBlocked } from "./callContext.js";
 let scheduledTask: ScheduledTask | null = null;
 let isJobRunning = false;
 let lastRunStats: CheckRemindersResult | null = null;
@@ -45,9 +46,7 @@ export interface CallSchedulerDependencies {
   now: () => number;
 }
 export function bookingTime(value: string): number {
-  return Date.parse(
-    /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}+01:00`,
-  );
+  return appointmentTimestamp(value);
 }
 export function isCallDue(
   state: AppState,
@@ -58,6 +57,8 @@ export function isCallDue(
 ): boolean {
   const settings = state.settings.calls;
   const starts = bookingTime(booking.startTime);
+  const customer = state.customers.find(c => c.id === booking.customerId);
+  if (!customer || callsBlocked(state, customer.phone)) return false;
   if (
     !settings ||
     !Number.isFinite(starts) ||
@@ -225,16 +226,7 @@ export async function runCallReminders(
           const call = await deps.trigger({
             fromNumber: current.business.voice.number,
             agentId: current.business.voice.agentId,
-            toNumber: customer.phone,
-            dynamicVariables: {
-              business_name: current.business.name,
-              customer_name: customer.name,
-              service_name: service.name,
-              appointment_date: booking.startTime.slice(0, 10),
-              appointment_time: booking.startTime.slice(11, 16),
-              call_type: type,
-              booking_code: currentBooking.code,
-            },
+            ...bookingCallContext(current, currentBooking, type, deps.now()),
             metadata,
           });
           await deps.save({

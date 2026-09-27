@@ -23,6 +23,7 @@ export interface Service {
   active: boolean;
 }
 export interface Customer {
+  voiceCallsBlocked?: boolean;
   id: string;
   name: string;
   phone: string;

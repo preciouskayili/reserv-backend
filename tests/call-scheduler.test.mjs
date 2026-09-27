@@ -211,3 +211,29 @@ test("concurrent reminder and unpaid workers share a dispatch lock", async () =>
   await runCallReminders(h.deps);
   assert.equal(h.calls.length, 1);
 });
+
+test('scheduled calls use an outbound identity check and the current saved contact', async () => {
+  const state = fixture(), h = harness(state);
+  h.deps.read = async () => {
+    const current = structuredClone(state);
+    current.customers[0].name = 'Updated Customer';
+    current.services[0].name = 'Updated Service';
+    return { state: current };
+  };
+  await runCallReminders(h.deps);
+  assert.equal(h.calls.length, 1);
+  assert.match(h.calls[0].dynamicVariables.opening_message, /Am I speaking with Updated Customer/);
+  assert.equal(h.calls[0].dynamicVariables.service_name, 'Updated Service');
+  assert.doesNotMatch(h.calls[0].dynamicVariables.opening_message, /How can I help|Updated Service/);
+});
+
+test('opt-outs stop scheduled calls even when another profile uses the same number', async () => {
+  const state = fixture();
+  state.settings.calls.enabled = true;
+  state.customers.push({ id: 'opted-out', phone: '08000000000', voiceCallsBlocked: true });
+  assert.equal(isCallDue(state, state.bookings[0], 'reminder', now), false);
+  const h = harness(state);
+  await runCallReminders(h.deps);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.claims.size, 0);
+});

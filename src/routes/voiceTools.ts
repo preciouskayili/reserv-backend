@@ -60,9 +60,10 @@ export function createCallVerifier(deps: VoiceToolDependencies) {
       direction: call.direction,
       customerPhone: (call.direction === "inbound" ? call.from_number : call.to_number) || undefined,
       bookingId: metadata.business_id === businessId && typeof metadata.booking_id === "string" ? metadata.booking_id : undefined,
+      testCall: metadata.test_call === true,
     };
     if (cache.size > 2000) for (const [k, v] of cache) if (v.expires <= deps.now()) cache.delete(k);
-    cache.set(key, { ctx, expires: deps.now() + 15 * 60000 });
+    cache.set(key, { ctx, expires: deps.now() + 30000 });
     return ctx;
   };
 }

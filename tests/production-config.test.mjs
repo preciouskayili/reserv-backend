@@ -8,6 +8,11 @@ test('production rejects local browser origins, default email senders and invali
     assert.ok(checkProductionConfig({ ...valid, ...override }).errors.length > 0);
   }
 });
+test('transfer-only launch is valid without hosted checkout credentials', () => {
+  const result = checkProductionConfig(valid);
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.warnings.some(message => message.includes('only transfer receipts')));
+});
 test('production voice calling requires authenticated booking tools and a public webhook', () => {
   const voice = { ...valid, AETHEX_API_KEY: 'fixture', AETHEX_WEBHOOK_SECRET: 'signing', AETHEX_PUBLIC_WEBHOOK_URL: 'https://api.example.test/api/calls/webhook', VOICE_TOOLS_SECRET: 't'.repeat(40) };
   assert.equal(checkProductionConfig(voice).errors.length, 0);

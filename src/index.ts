@@ -90,6 +90,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "reserv-backend",
+    release: process.env.RAILWAY_GIT_COMMIT_SHA || null,
     timestamp: new Date().toISOString(),
     voice: {
       fromNumber: process.env.AETHEX_FROM_NUMBER?.trim() || null,

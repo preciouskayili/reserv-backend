@@ -136,3 +136,88 @@ test('inbound call-ended events carry what is needed to create their call record
   assert.deepEqual(update.inbound, { agentId: 'agent-a', from: '+2348030000000', to: '+2342010000000', startedAt: undefined });
   assert.equal(callEventUpdate('call.ended', { call_id: 'out-1', status: 'completed', direction: 'outbound', agent_id: 'agent-a' }).inbound, undefined);
 });
+
+test('reference lookup supports callers on another number and reports cancelled bookings accurately', async () => {
+  const businessId = await business('Reference Studio');
+  const caller = { businessId, callId: 'reference-call', direction: 'inbound', customerPhone: '+2348035550001' };
+  const booked = await runVoiceTool('create_booking', caller, { service: 'Classic Cut', start_time: `${day}T10:00`, customer_name: 'Reference Caller' });
+  const other = { ...caller, customerPhone: '+2348035550002' };
+  assert.equal((await runVoiceTool('find_my_bookings', other, {})).bookings.length, 0);
+  const found = await runVoiceTool('find_my_bookings', other, { booking_reference: booked.booking_reference });
+  assert.equal(found.bookings[0].customer_name, 'Reference Caller');
+  assert.equal(found.bookings[0].upcoming, true);
+  await runVoiceTool('cancel_booking', caller, { booking_reference: booked.booking_reference });
+  const cancelled = await runVoiceTool('find_my_bookings', caller, { booking_reference: booked.booking_reference });
+  assert.equal(cancelled.bookings[0].status, 'Cancelled');
+  assert.equal(cancelled.bookings[0].upcoming, false);
+});
+
+test('rescheduling availability can reuse the booking time without hiding other conflicts', async () => {
+  const businessId = await business('Reschedule Studio');
+  const caller = { businessId, callId: 'reschedule-call', direction: 'inbound', customerPhone: '+2348035550003' };
+  const booked = await runVoiceTool('create_booking', caller, { service: 'Classic Cut', start_time: `${day}T10:00`, customer_name: 'Time Caller' });
+  await runVoiceTool('create_booking', caller, { service: 'Classic Cut', start_time: `${day}T12:00`, customer_name: 'Time Caller' });
+  const times = await runVoiceTool('check_availability', caller, { service: 'Classic Cut', date: day, booking_reference: booked.booking_reference });
+  assert.ok(times.open_times.some(t => t.start_time === `${day}T10:00`));
+  assert.ok(!times.open_times.some(t => t.start_time === `${day}T12:00`));
+  assert.equal((await runVoiceTool('reschedule_booking', caller, { booking_reference: booked.booking_reference, new_start_time: `${day}T10:30` })).rescheduled, true);
+});
+
+test('voice tools reject impossible dates and ambiguous specialist names', async () => {
+  const businessId = await business('Ambiguous Studio');
+  const snapshot = await workspaces.read(businessId);
+  snapshot.state.staff.push({ id: 'ada-second', name: 'Ada Second', role: 'Stylist', initials: 'AS' });
+  snapshot.state.services[0].staffIds.push('ada-second');
+  await workspaces.save(businessId, snapshot.revision, snapshot.state);
+  const caller = { businessId, callId: 'ambiguous-call', direction: 'inbound', customerPhone: '+2348035550004' };
+  assert.match((await runVoiceTool('check_availability', caller, { service: 'Classic Cut', date: '2027-02-30' })).error, /real calendar date/);
+  assert.match((await runVoiceTool('check_availability', caller, { service: 'Classic Cut', date: day, specialist: 'Ada' })).error, /Several specialists/);
+  assert.match((await runVoiceTool('check_availability', caller, { service: 'Classic Cut', date: day, earliest_time: '15:00', latest_time: '10:00' })).error, /earliest time/);
+});
+
+test('payment summaries distinguish a deposit from the full remaining balance and review state', async () => {
+  const businessId = await business('Payment Studio');
+  const caller = { businessId, callId: 'payment-call', direction: 'inbound', customerPhone: '+2348035550005' };
+  const booked = await runVoiceTool('create_booking', caller, { service: 'Classic Cut', start_time: `${day}T10:00`, customer_name: 'Paid Caller' });
+  const snapshot = await workspaces.read(businessId);
+  const booking = snapshot.state.bookings[0];
+  snapshot.state.payments.push({ id: 'deposit', bookingId: booking.id, amount: 4000, status: 'approved', method: 'transfer', createdAt: new Date().toISOString() });
+  snapshot.state.payments.push({ id: 'balance', bookingId: booking.id, amount: 6000, status: 'review', method: 'transfer', createdAt: new Date().toISOString() });
+  await workspaces.save(businessId, snapshot.revision, snapshot.state);
+  const payment = await runVoiceTool('get_payment_status', caller, { booking_reference: booked.booking_reference });
+  assert.equal(payment.outstanding_to_secure_booking, '₦0');
+  assert.equal(payment.remaining_balance, '₦6,000');
+  assert.equal(payment.receipt_under_review, true);
+});
+
+test('wrong-number and stop-call requests persist for every profile on the verified phone only', async () => {
+  const businessId = await business('Preferences Studio');
+  const caller = { businessId, callId: 'preferences-call', direction: 'outbound', customerPhone: '+2348035550006' };
+  const booked = await runVoiceTool('create_booking', caller, { service: 'Classic Cut', start_time: `${day}T10:00`, customer_name: 'One Person' });
+  await runVoiceTool('create_booking', caller, { service: 'Classic Cut', start_time: `${day}T12:00`, customer_name: 'Another Person', phone: '08035550006' });
+  await runVoiceTool('create_booking', caller, { service: 'Classic Cut', start_time: `${day}T14:00`, customer_name: 'Different Number', phone: '+2348035550099' });
+  assert.equal((await runVoiceTool('stop_customer_calls', caller, {})).calls_stopped, true);
+  const snapshot = await workspaces.read(businessId);
+  assert.equal(snapshot.state.customers.filter(c => c.voiceCallsBlocked).length, 2);
+  assert.equal(snapshot.state.bookings.find(b => b.code === booked.booking_reference).status, 'Pending');
+  const unknown = { ...caller, customerPhone: '+2348035550098' };
+  assert.equal((await runVoiceTool('stop_customer_calls', unknown, {})).calls_stopped, true);
+  assert.equal((await workspaces.read(businessId)).state.customers.find(c => c.phone === unknown.customerPhone).voiceCallsBlocked, true);
+});
+
+test('practice calls cannot read or change real customer records', async () => {
+  const businessId = await business('Practice Studio');
+  const caller = { businessId, callId: 'practice-call', direction: 'outbound', customerPhone: '+2348035550007', testCall: true };
+  for (const name of ['create_booking', 'find_my_bookings', 'get_payment_status', 'reschedule_booking', 'cancel_booking', 'confirm_attendance', 'stop_customer_calls'])
+    assert.match((await runVoiceTool(name, caller, {})).error, /practice call/);
+  assert.equal((await runVoiceTool('get_business_info', caller, {})).name, 'Practice Studio');
+  assert.equal((await workspaces.read(businessId)).state.bookings.length, 0);
+});
+
+test('live call verification expires promptly and propagates trusted test context', async () => {
+  let now = 1000, status = 'connected';
+  const verify = createCallVerifier({ agentFor: async () => 'agent', now: () => now, findCall: async () => ({ id: 'call', agent_id: 'agent', direction: 'outbound', status, to_number: '+2348035550008', metadata: { test_call: true } }) });
+  assert.equal((await verify('business', { call_id: 'call' })).testCall, true);
+  status = 'completed'; now += 31000;
+  assert.equal(await verify('business', { call_id: 'call' }), null);
+});

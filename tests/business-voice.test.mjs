@@ -1,7 +1,8 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, HttpError } from '../dist/domain/workspace.js';
-import { provisionBusinessNumber } from '../dist/services/businessVoice.js';
+import { provisionBusinessNumber, requestBusinessNumber } from '../dist/services/businessVoice.js';
+import { workspaces } from '../dist/services/workspaces.js';
 
 function fixture() {
   let snapshot = { revision: 1, state: initialState({ name: 'Test Studio', owner: 'Test Owner', category: 'Wellness', phone: '+2348000000000', address: 'Test address', serviceName: 'Consultation', duration: 30, price: 1000 }) };
@@ -23,9 +24,43 @@ function fixture() {
   };
   return { deps, id: snapshot.state.business.id, snapshot: () => snapshot, counts: () => ({ purchases, agents, registrations }) };
 }
+test('repeated setup requests retain the business number and reject country changes after purchase', async () => {
+  const h = fixture();
+  await provisionBusinessNumber(h.id, h.deps);
+  const read = mock.method(workspaces, 'read', h.deps.read);
+  const save = mock.method(workspaces, 'save', h.deps.save);
+  const network = mock.method(globalThis, 'fetch', async () => { throw new Error('Existing phone setup must not contact providers'); });
+  try {
+    for (const status of ['active', 'needs_review', 'failed']) {
+      const snapshot = await h.deps.read(h.id);
+      snapshot.state.business.voice.status = status;
+      await h.deps.save(h.id, snapshot.revision, snapshot.state);
+      const revision = h.snapshot().revision;
+      const results = await Promise.all(Array.from({ length: 8 }, () => requestBusinessNumber(h.id, 'US')));
+      assert.ok(results.every(result => result.state.business.voice.twilioSid === 'twilio-number'));
+      assert.equal(h.snapshot().revision, revision);
+      await assert.rejects(requestBusinessNumber(h.id, 'GB'), error => error instanceof HttpError && error.status === 409);
+      assert.equal(h.snapshot().state.business.voice.country, 'US');
+    }
+    assert.equal(network.mock.callCount(), 0);
+    assert.equal(save.mock.callCount(), 0);
+    assert.equal(h.counts().purchases, 1);
+  } finally {
+    read.mock.restore(); save.mock.restore(); network.mock.restore();
+  }
+});
+test('existing purchased numbers finish registration without permitting new purchases', async () => {
+  const h = fixture();
+  const snapshot = await h.deps.read(h.id);
+  Object.assign(snapshot.state.business.voice, { agentId: 'existing-agent', twilioSid: 'existing-number', number: '+12025550123', status: 'needs_review' });
+  await h.deps.save(h.id, snapshot.revision, snapshot.state);
+  await provisionBusinessNumber(h.id, h.deps);
+  assert.equal(h.snapshot().state.business.voice.status, 'active');
+  assert.deepEqual(h.counts(), { purchases: 0, agents: 0, registrations: 1 });
+});
 test('concurrent provisioning purchases exactly one dedicated number and agent', async () => {
   const h = fixture();
-  await Promise.all([provisionBusinessNumber(h.id, h.deps), provisionBusinessNumber(h.id, h.deps)]);
+  await Promise.all(Array.from({ length: 8 }, () => provisionBusinessNumber(h.id, h.deps)));
   assert.equal(h.snapshot().state.business.voice.status, 'active');
   assert.deepEqual(h.counts(), { purchases: 1, agents: 1, registrations: 1 });
   await provisionBusinessNumber(h.id, h.deps);
@@ -57,4 +92,32 @@ test('registration retries reuse the purchased number; verification requirements
   await provisionBusinessNumber(regulated.id, regulated.deps);
   assert.equal(regulated.counts().purchases, 0);
   assert.match(regulated.snapshot().state.business.voice.error, /verification/);
+});
+
+test('active agents receive the new opener once and unchanged configurations do not repeat provider writes', async () => {
+  const { syncBusinessAgent } = await import('../dist/services/businessVoice.js');
+  const { agentFingerprint } = await import('../dist/services/voiceAgent.js');
+  const h = fixture();
+  await provisionBusinessNumber(h.id, h.deps);
+  const requests = [];
+  const api = { request: async (path, method, body) => { requests.push({ path, method, body }); return []; } };
+  assert.equal(await syncBusinessAgent(h.id, h.deps, api), true);
+  assert.equal(requests[0].body.first_message, '{{opening_message}}');
+  assert.equal(h.snapshot().state.business.voice.agentConfig, agentFingerprint(h.snapshot().state.business));
+  const count = requests.length;
+  assert.equal(await syncBusinessAgent(h.id, h.deps, api), true);
+  assert.equal(requests.length, count);
+  const changed = await h.deps.read(h.id);
+  changed.state.business.name = 'Renamed Studio';
+  await h.deps.save(h.id, changed.revision, changed.state);
+  assert.equal(await syncBusinessAgent(h.id, h.deps, api), true);
+  assert.match(requests[count].body.dynamic_variables.opening_message, /Renamed Studio/);
+});
+
+test('a provider sync failure does not mark the business agent as up to date', async () => {
+  const { syncBusinessAgent } = await import('../dist/services/businessVoice.js');
+  const h = fixture();
+  await provisionBusinessNumber(h.id, h.deps);
+  assert.equal(await syncBusinessAgent(h.id, h.deps, { request: async () => { throw new Error('Provider unavailable'); } }), false);
+  assert.equal(h.snapshot().state.business.voice.agentConfig, undefined);
 });

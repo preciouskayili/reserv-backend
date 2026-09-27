@@ -46,13 +46,17 @@ test('onboarding, tenant isolation, public privacy and booking conflicts', async
     assert.equal((await request('/workspaces', { token: a })).workspaces.length, 1);
     const changed = structuredClone(alpha);
     changed.state.business.description = 'Alpha only';
+    changed.state.business.voice = { country: 'US', status: 'active', number: '+12025550123', twilioSid: 'forged', agentId: 'forged' };
     changed.state.staff[0].avatarUrl = 'https://example.test/updated.webp';
     const saved = await request(`/workspaces/${aid}/state`, { token: a, method: 'PUT', body: changed });
+    assert.equal(saved.state.business.voice, undefined, 'workspace edits cannot forge an approved or purchased phone');
     await request(`/workspaces/${aid}/state`, { token: a, method: 'PUT', body: changed, status: 409 });
     assert.equal((await request(`/workspaces/${bid}/state`, { token: b })).state.business.description, '');
     const date = new Date(); date.setUTCDate(date.getUTCDate() + 3);
     while ([0,6].includes(date.getUTCDay())) date.setUTCDate(date.getUTCDate() + 1);
     const payload = { serviceId: saved.state.services[0].id, staffId: saved.state.staff[0].id, startTime: `${date.toISOString().slice(0,10)}T10:00:00`, name: 'Private Customer', phone: '+2348111111111', notes: 'Private booking note' };
+    await request('/public/businesses/studio-alpha/bookings', { method: 'POST', body: { ...payload, startTime: '2027-02-30T10:00:00' }, status: 400 });
+    await request('/public/businesses/studio-alpha/bookings', { method: 'POST', body: { ...payload, phone: '00000000000' }, status: 400 });
     const created = await request('/public/businesses/studio-alpha/bookings', { method: 'POST', body: payload, status: 201 });
     assert.match(created.booking.code, /^[A-Z0-9]{12}$/);
     await request('/public/businesses/studio-alpha/bookings', { method: 'POST', body: payload, status: 409 });

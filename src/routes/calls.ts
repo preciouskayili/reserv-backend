@@ -11,6 +11,7 @@ import { businessCallConfig } from "../services/businessVoice.js";
 import { HttpError } from "../domain/workspace.js";
 import { refreshCallStatus, refreshCallList } from "../services/callStatus.js";
 import { aethex, normalizeE164 } from "../lib/aethex.js";
+import { bookingCallContext, callsBlocked, outboundOpening } from "../services/callContext.js";
 import { db, type CallRecord } from "../services/dbService.js";
 import {
   checkAndDispatchReminders,
@@ -39,12 +40,10 @@ const triggerCallSchema = z.object({
   appointmentTime: z.string().optional(),
   appointmentDate: z.string().optional(),
   businessName: z.string().optional(),
+  testCall: z.boolean().default(false),
   callType: z
     .enum(["reminder", "confirmation", "unpaid_checkin", "manual"])
     .default("reminder"),
-  customPromptVariables: z
-    .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
-    .optional(),
 });
 
 /**
@@ -73,9 +72,8 @@ router.post(
         serviceName,
         appointmentTime,
         appointmentDate,
-        businessName,
         callType,
-        customPromptVariables,
+        testCall,
       } = parseResult.data;
 
       const snapshot = await workspaces.read(req.workspaceId!);
@@ -83,23 +81,33 @@ router.post(
       const booking = bookingId ? state.bookings.find((b) => b.id === bookingId) : undefined;
       if (bookingId && !booking)
         return res.status(404).json({ error: "Reservation not found" });
-      const formattedToNumber = normalizeE164(toNumber);
-
-      const dynamicVariables: Record<string, string | number | boolean> = {
-        ...customPromptVariables,
-        customer_name: customerName || "there",
+      let formattedToNumber: string;
+      try { formattedToNumber = normalizeE164(toNumber); }
+      catch { throw new HttpError(400, "Enter a valid phone number with its country code."); }
+      if (testCall && booking) throw new HttpError(400, "Test calls cannot be linked to a real reservation.");
+      if (!booking && !testCall && callType !== "manual")
+        throw new HttpError(400, "Choose a reservation for a reminder, confirmation or payment call.");
+      if (callsBlocked(state, formattedToNumber)) throw new HttpError(409, "This customer has asked not to receive calls.");
+      const context = booking ? bookingCallContext(state, booking, callType) : undefined;
+      if (context && context.toNumber !== formattedToNumber)
+        throw new HttpError(409, "The customer's phone number changed. Refresh the reservation before calling.");
+      const dynamicVariables: Record<string, string | number | boolean> = context?.dynamicVariables ?? {
+        opening_message: outboundOpening(state.business.name, customerName),
+        customer_name: customerName?.trim() || "not provided",
         business_name: state.business.name,
-        service_name: serviceName || "your upcoming appointment",
-        appointment_date: appointmentDate || "today",
-        appointment_time: appointmentTime || "your scheduled time",
+        service_name: testCall ? serviceName?.trim() || "example service" : "not provided",
+        appointment_date: testCall ? appointmentDate?.trim() || "not provided" : "not provided",
+        appointment_time: testCall ? appointmentTime?.trim() || "not provided" : "not provided",
         call_type: callType,
-        booking_code: booking?.code ?? "not provided",
+        booking_code: "not provided",
+        test_call: testCall,
       };
 
       const metadata: Record<string, unknown> = {
         business_id: req.workspaceId,
         booking_id: bookingId,
         call_type: callType,
+        test_call: testCall,
         dispatched_at: new Date().toISOString(),
       };
 
@@ -128,15 +136,21 @@ router.post(
         created_at: aethexResponse.created_at,
       };
 
-      const savedCall = await db.createCall(callRecord);
+      // Once the provider accepts the call, a history outage must not invite a second dial.
+      let savedCall = callRecord;
+      let historySaved = false;
+      try { savedCall = await db.createCall(callRecord); historySaved = true; }
+      catch { console.error("[Calls API] Accepted call could not be recorded", { businessId: req.workspaceId, callId: aethexResponse.id }); }
 
       return res.status(202).json({
-        message: "Call queued successfully",
+        message: historySaved ? "Call queued successfully" : "Call queued. Call history could not be saved; do not place it again.",
         call: savedCall,
         aethex_call_id: aethexResponse.id,
       });
     } catch (error) {
       console.error("[Calls API] Trigger error:", error);
+      if (error instanceof Error && ["TimeoutError", "AbortError", "TypeError"].includes(error.name))
+        return res.status(503).json({ error: "The call request could not be confirmed. Check call history before placing another call." });
       return res.status(error instanceof HttpError ? error.status : 500).json({
         error: "Failed to dispatch call",
         message: error instanceof Error ? error.message : "Unknown error",

@@ -83,13 +83,13 @@ export function publicVoice(voice?: BusinessVoice) {
   return { country: voice.country, status: voice.status, number: voice.status === "active" ? voice.number : undefined, error: voice.error };
 }
 export async function requestBusinessNumber(id: string, country: string): Promise<Snapshot> {
-  if (!(await numberCountries()).some(c => c.code === country)) throw new HttpError(400, "Choose a supported phone-number country.");
   const snapshot = await workspaces.read(id);
   const previous = snapshot.state.business.voice;
   if (previous && (previous.status === "active" || previous.status === "provisioning" || previous.purchaseStarted || previous.twilioSid)) {
     if (previous.country !== country) throw new HttpError(409, "A number has already been requested for this business. Contact support to change its country.");
     return snapshot;
   }
+  if (!(await numberCountries()).some(c => c.code === country)) throw new HttpError(400, "Choose a supported phone-number country.");
   return workspaces.save(id, snapshot.revision, { ...snapshot.state, business: { ...snapshot.state.business, voice: { ...previous, selectedNumber: previous?.country === country ? previous.selectedNumber : undefined, country, status: "queued", error: undefined } } });
 }
 export interface ProvisionDependencies {
@@ -136,6 +136,7 @@ const live: ProvisionDependencies = {
       metadata: { reserv_business_id: business.id }, public_access: false, recording_enabled: false, transcription_enabled: true,
     });
     if (!agent.id) throw new Error("Agent creation response was incomplete");
+    await syncAgent({ request: aethexAdmin }, agent.id, business);
     return agent.id;
   },
   async register(number, agentId) {
@@ -221,6 +222,7 @@ export async function syncBusinessAgent(id: string, deps: Pick<ProvisionDependen
     const voice = snapshot.state.business.voice;
     if (voice?.status !== "active" || !voice.agentId) return false;
     const fingerprint = agentFingerprint(snapshot.state.business);
+    if (voice.agentConfig === fingerprint) return true;
     await syncAgent(api, voice.agentId, snapshot.state.business);
     for (let attempt = 0; attempt < 5; attempt++) {
       const current = await deps.read(id);
@@ -243,22 +245,24 @@ export async function syncBusinessAgent(id: string, deps: Pick<ProvisionDependen
 let worker: ReturnType<typeof setInterval> | undefined;
 let workerBusy = false;
 export function startNumberProvisioning() {
-  if (!isNumberProvisioningConfigured() || worker || process.env.NODE_ENV === "test") return;
-  worker = setInterval(async () => {
+  if (!process.env.AETHEX_API_KEY?.trim() || worker || process.env.NODE_ENV === "test") return;
+  const run = async () => {
     if (workerBusy) return;
     workerBusy = true;
     try {
       for (const { state } of await workspaces.all()) {
         const voice = state.business.voice;
-        if (voice && (voice.status === "queued" || voice.status === "provisioning" && (!voice.lockUntil || Date.parse(voice.lockUntil) < Date.now())))
+        if (isNumberProvisioningConfigured() && voice && (voice.status === "queued" || voice.status === "provisioning" && (!voice.lockUntil || Date.parse(voice.lockUntil) < Date.now())))
           await provisionBusinessNumber(state.business.id);
         else if (isVoiceToolsConfigured() && voice?.status === "active" && voice.agentId && voice.agentConfig !== agentFingerprint(state.business))
           await syncBusinessAgent(state.business.id);
       }
     } catch { console.error("Business phone provisioning could not complete this cycle."); }
     finally { workerBusy = false; }
-  }, 60000);
+  };
+  worker = setInterval(() => { void run(); }, 60000);
   worker.unref();
+  void run();
 }
 export function stopNumberProvisioning() { if (worker) clearInterval(worker); worker = undefined; }
 export function businessCallConfig(snapshot: Snapshot) {

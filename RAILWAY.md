@@ -13,7 +13,7 @@ Create two persistent services, one from each repository: `backend` and `fronten
 | Serverless / sleeping | **Disabled** | Disabled for initial launch |
 | Replicas | 1 initially | 1 initially |
 
-Use a supported Node 22.13+ runtime and pnpm 11.9.0. Leave Railway's `PORT` variable in place. Generate HTTPS domains for both services before building the frontend. Do not configure a Railway cron schedule on the backend service: its Node scheduler runs inside the persistent API process.
+Use a supported Node 22.13+ runtime and pnpm 11.11.0. Leave Railway's `PORT` variable in place. Generate HTTPS domains for both services before building the frontend. Do not configure a Railway cron schedule on the backend service: its Node scheduler runs inside the persistent API process.
 
 Railway's health check checks deployment startup, not continuous uptime. Monitor `/health` externally and inspect the protected `/api/calls/cron/status` endpoint using `x-cron-secret`. The default call check should advance about every five minutes; alert if it stops advancing for ten minutes. Scheduler outcomes are written to backend logs. A process restart performs an immediate reminder check, but a booking whose appointment has already started is never called retrospectively.
 
@@ -22,6 +22,30 @@ See Railway's current [persistent service guidance](https://docs.railway.com/bui
 ## Backend variables
 
 Copy private credentials into Railway Variables, never the frontend repository or build variables.
+
+### One phone number per business
+
+Phone setup is automatic when a business chooses a country. Each business receives one dedicated number. Repeated requests reuse its assignment, concurrent workers share a database revision lock, and registration retries use the number already purchased. Once a purchase has started, country changes cannot trigger another number purchase. Uncertain provider outcomes require reconciliation before another purchase is attempted.
+
+There is no manual approval variable. Phone assignments are controlled by the backend; editing workspace JSON cannot create, replace or remove them. Users can skip phone setup and start taking bookings immediately. Provider-required country verification may still prevent automatic assignment.
+
+The limit is per business, not per user account: a user can create multiple businesses. It does not impose a call-spend cap or metered billing. No database migration is needed for this change.
+
+### Launch with transfer receipts
+
+Leave `PAYSTACK_SECRET_KEY`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` unset until hosted checkout is ready. Their absence does not prevent startup. Customers see transfer receipt submission; disabled payment providers are hidden. Businesses must give customers their bank details directly and review receipts before approving payment. Keep the checkout database migrations installed: the payment page still checks for an existing checkout to prevent double payment.
+
+### Verify the deployed release
+
+`GET /health` reports `release` from Railway's `RAILWAY_GIT_COMMIT_SHA` (or `null` when unavailable). After deploying the reviewed frontend and backend, run this read-only check from the backend directory:
+
+```sh
+pnpm check:deployment https://reserv-backend-production-3134.up.railway.app https://YOUR_FRONTEND_DOMAIN
+```
+
+Optionally set `EXPECTED_RELEASE` to the full backend commit SHA to require an exact match. The check covers backend health, private-route authentication, a public database lookup, payment options, the frontend login page, and CORS. It does not send email, place calls, create bookings, or charge money. Complete the end-to-end release checks below separately.
+
+### Required environment
 
 - `NODE_ENV=production`
 - `CLIENT_ORIGIN=https://YOUR_FRONTEND_DOMAIN` (comma-separated exact origins if needed)
@@ -40,7 +64,7 @@ Copy private credentials into Railway Variables, never the frontend repository o
 
 Dedicated business numbers and agents are stored in Supabase. `AETHEX_FROM_NUMBER` is a legacy fallback and is not required by the automatic scheduler when businesses have their own active numbers. Number-country choice does not change appointment timezone: the current application schedules in WAT (UTC+01:00), with NGN prices.
 
-Within a minute of startup, the backend updates every active business agent (including the existing Kingz Cuts agent) with the current prompt, webhook URL, transfer number (the business phone) and booking tools. It repeats this whenever the business phone, name, `VOICE_TOOLS_SECRET` or `AETHEX_PUBLIC_WEBHOOK_URL` changes. A failed update is logged and retried after 15 minutes. Verify a signed call event reaches the deployed endpoint. Call-history polling repairs missed status events but does not replace recording/transcript webhooks.
+On startup and every minute, the backend checks active business agents and applies changed prompts, greetings, webhook URLs, transfer numbers and booking tools. This needs `AETHEX_API_KEY`, `VOICE_TOOLS_SECRET` and `AETHEX_PUBLIC_WEBHOOK_URL`; syncing existing agents does not need Twilio purchasing credentials. Unchanged configurations are skipped. A failed update is logged and retried after 15 minutes. Outbound calls supply their own identity-check opening; inbound calls use the agent's stored welcome. Verify a signed call event reaches the deployed endpoint. Call-history polling repairs missed status events but does not replace recording/transcript webhooks.
 
 For hosted payment checkout, also configure `PAYMENT_RETURN_URL=https://YOUR_FRONTEND_DOMAIN` and Paystack or Stripe credentials as described in [PAYMENTS.md](PAYMENTS.md). Without them, online payment buttons stay unavailable and transfer receipt submission remains available. Stripe also needs its webhook signing secret. Configure the production provider webhook endpoints before accepting online payments.
 

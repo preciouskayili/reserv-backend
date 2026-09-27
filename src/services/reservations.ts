@@ -45,6 +45,10 @@ export function checkSlot(
     throw new HttpError(400, "Choose an available service and specialist");
   const start = stamp(input.startTime),
     now = Date.now();
+  // Date.parse normalizes dates such as February 30; never silently book a different day.
+  const wallTime = new Date(`${input.startTime}Z`);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00$/.test(input.startTime) || !Number.isFinite(wallTime.getTime()) || wallTime.toISOString().slice(0, 19) !== input.startTime)
+    throw new HttpError(400, "Choose a valid appointment date and time");
   if (
     !Number.isFinite(start) ||
     start < now + state.business.rules.minNoticeMinutes * 60000 ||
@@ -107,7 +111,9 @@ export async function createReservation(
     { service, end } = checkSlot(snapshot, input),
     state = snapshot.state;
 
-  const phone = phoneKey(input.phone);
+  let phone: string;
+  try { phone = normalizeE164(input.phone); }
+  catch { throw new HttpError(400, "Enter a valid phone number with its country code."); }
 
   let customer = state.customers.find(
     (c) =>
@@ -120,7 +126,7 @@ export async function createReservation(
     customer = {
       id: randomUUID(),
       name: input.name,
-      phone: input.phone,
+      phone,
       notes: "",
     };
     state.customers.push(customer);

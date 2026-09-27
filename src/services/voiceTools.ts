@@ -4,6 +4,7 @@ import { HttpError } from "../domain/workspace.js";
 import type { AppState, Booking, Service, StaffMember } from "../domain/model.js";
 import { workspaces, type Snapshot } from "./workspaces.js";
 import { changeReservation, checkSlot, createReservation, phoneKey } from "./reservations.js";
+import { appointmentTimestamp } from "./callContext.js";
 
 /** The verified call a tool request belongs to. Only the phone network sets these values, never the caller. */
 export interface VoiceCallContext {
@@ -13,6 +14,7 @@ export interface VoiceCallContext {
   /** The customer's side of the call: the caller for inbound calls, the dialled number for outbound. */
   customerPhone?: string;
   bookingId?: string;
+  testCall?: boolean;
 }
 
 export type ToolResult = Record<string, unknown>;
@@ -27,7 +29,10 @@ export const spokenTime = (local: string) => `${dayFormat.format(stamp(local))},
 const naira = (amount: number) => `₦${amount.toLocaleString("en-NG")}`;
 const ACTIVE = ["Confirmed", "Pending", "Needs confirmation", "Rescheduled"];
 
-const dateArg = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD for dates");
+const dateArg = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD for dates").refine(value => {
+  const date = new Date(`${value}T12:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}, "Choose a real calendar date");
 const timeArg = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:00)?$/, "Use YYYY-MM-DDTHH:MM for times");
 const clockArg = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM for times of day");
 const codeArg = z.string().trim().transform(v => v.replace(/[\s-]/g, "").toUpperCase()).pipe(z.string().regex(/^[A-Z0-9]{12}$/, "Booking references are 12 letters and numbers"));
@@ -48,14 +53,17 @@ function findStaff(state: AppState, service: Service, value?: string): StaffMemb
   if (!value?.trim()) return undefined;
   const eligible = state.staff.filter(m => service.staffIds.includes(m.id));
   const wanted = value.trim().toLowerCase();
-  const match = eligible.find(m => m.id === value || m.name.toLowerCase() === wanted)
-    ?? eligible.find(m => m.name.toLowerCase().split(/\s+/).includes(wanted) || m.name.toLowerCase().includes(wanted));
+  const exact = eligible.find(m => m.id === value || m.name.toLowerCase() === wanted);
+  if (exact) return exact;
+  const matches = eligible.filter(m => m.name.toLowerCase().includes(wanted));
+  if (matches.length > 1) throw new HttpError(400, `Several specialists match ${value}: ${matches.map(m => m.name).join(", ")}. Ask which one.`);
+  const match = matches[0];
   if (!match) throw new HttpError(400, `${value} does not offer ${service.name}. Specialists for it: ${eligible.map(m => m.name).join(", ") || "none"}.`);
   return match;
 }
 
 /** Start times (WAT, YYYY-MM-DDTHH:MM) on a date, with the specialists free at each. */
-export function openSlots(snapshot: Snapshot, service: Service, date: string, staff?: StaffMember, earliest?: string, latest?: string) {
+export function openSlots(snapshot: Snapshot, service: Service, date: string, staff?: StaffMember, earliest?: string, latest?: string, excludeBookingId?: string) {
   const { state } = snapshot;
   const hours = state.business.hours[(new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7];
   if (!hours || hours.closed) return [];
@@ -66,7 +74,7 @@ export function openSlots(snapshot: Snapshot, service: Service, date: string, st
     const clock = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
     if ((earliest && clock < earliest) || (latest && clock > latest)) continue;
     const free = people.filter(person => {
-      try { checkSlot(snapshot, { serviceId: service.id, staffId: person.id, startTime: `${date}T${clock}:00` }); return true; }
+      try { checkSlot(snapshot, { serviceId: service.id, staffId: person.id, startTime: `${date}T${clock}:00` }, excludeBookingId); return true; }
       catch { return false; }
     });
     if (free.length) slots.push({ start: `${date}T${clock}`, staff: free });
@@ -90,12 +98,14 @@ function bookingSummary(state: AppState, booking: Booking) {
 function paymentSummary(state: AppState, booking: Booking) {
   const payments = (state.payments ?? []).filter(p => p.bookingId === booking.id);
   const paid = payments.filter(p => p.status === "approved" && !p.disputed).reduce((sum, p) => sum + Math.max(0, p.amount - (p.refundedAmount ?? 0)), 0);
-  const total = booking.totalAmount ?? 0, required = booking.requiredAmount ?? total;
+  const service = state.services.find(s => s.id === booking.serviceId);
+  const total = booking.totalAmount ?? service?.price ?? 0, required = booking.requiredAmount ?? Math.min(total, service?.deposit || total);
   return {
     total_price: naira(total),
     amount_required_before_appointment: naira(required),
     amount_paid: naira(paid),
     outstanding_to_secure_booking: naira(Math.max(0, required - paid)),
+    remaining_balance: naira(Math.max(0, total - paid)),
     receipt_under_review: payments.some(p => p.status === "review"),
     payment_policy: state.business.depositPolicy,
   };
@@ -122,7 +132,7 @@ function callerBookings(state: AppState, ctx: VoiceCallContext, now: number) {
   const phone = ctx.customerPhone ? phoneKey(ctx.customerPhone) : undefined;
   const customers = new Set(state.customers.filter(c => phone && phoneKey(c.phone) === phone).map(c => c.id));
   return state.bookings
-    .filter(b => (customers.has(b.customerId) || b.id === ctx.bookingId) && ACTIVE.includes(b.status) && Date.parse(`${b.endTime}${OFFSET}`) > now)
+    .filter(b => (customers.has(b.customerId) || b.id === ctx.bookingId) && ACTIVE.includes(b.status) && appointmentTimestamp(b.endTime) > now)
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
@@ -169,6 +179,7 @@ export const voiceTools: ToolDefinition[] = [
         services: state.services.filter(s => s.active).map(s => ({
           name: s.name, description: s.description, duration_minutes: s.duration, price: naira(s.price),
           deposit: s.deposit ? naira(s.deposit) : "none", specialists: state.staff.filter(m => s.staffIds.includes(m.id)).map(m => m.name),
+          amount_required_to_secure_booking: naira(s.deposit || s.price),
         })),
       };
     },
@@ -182,15 +193,21 @@ export const voiceTools: ToolDefinition[] = [
       specialist: str("Optional specialist name"),
       earliest_time: str("Optional earliest start, HH:MM 24-hour"),
       latest_time: str("Optional latest start, HH:MM 24-hour"),
+      booking_reference: str("For rescheduling only: the existing booking reference, so its own occupied time can be reused"),
     }, ["service"]),
     async run(ctx, raw, now) {
-      const args = z.object({ service: z.string().min(1), date: dateArg.optional(), specialist: z.string().optional(), earliest_time: clockArg.optional(), latest_time: clockArg.optional() }).parse(raw);
+      const args = z.object({ service: z.string().min(1), date: dateArg.optional(), specialist: z.string().optional(), earliest_time: clockArg.optional(), latest_time: clockArg.optional(), booking_reference: codeArg.optional() }).parse(raw);
       const snapshot = await workspaces.read(ctx.businessId);
       const service = findService(snapshot.state, args.service);
+      const existing = args.booking_reference ? bookingByCode(snapshot.state, args.booking_reference) : undefined;
+      if (existing && (existing.serviceId !== service.id || !ACTIVE.includes(existing.status)))
+        throw new HttpError(400, "Choose the active booking's original service when checking a reschedule.");
+      if (args.earliest_time && args.latest_time && args.earliest_time > args.latest_time)
+        throw new HttpError(400, "The earliest time must be before the latest time.");
       const staff = findStaff(snapshot.state, service, args.specialist);
       const describe = (slots: ReturnType<typeof openSlots>, limit: number) => slots.slice(0, limit).map(s => ({ start_time: s.start, when: spokenTime(s.start), specialists: s.staff.map(m => m.name) }));
       if (args.date) {
-        const slots = openSlots(snapshot, service, args.date, staff, args.earliest_time, args.latest_time);
+        const slots = openSlots(snapshot, service, args.date, staff, args.earliest_time, args.latest_time, existing?.id);
         return { service: service.name, date: args.date, open_times: describe(slots, 12), more_available: Math.max(0, slots.length - 12), ...(slots.length ? {} : { note: "No openings that day. Try another date or omit the date." }) };
       }
       const days = [];
@@ -198,10 +215,10 @@ export const voiceTools: ToolDefinition[] = [
       const horizon = Math.min(snapshot.state.business.rules.maxAdvanceDays, 30);
       for (let offset = 0; offset <= horizon && days.length < 3; offset++) {
         const date = new Date(Date.parse(`${today}T12:00:00Z`) + offset * 86400000).toISOString().slice(0, 10);
-        const slots = openSlots(snapshot, service, date, staff, args.earliest_time, args.latest_time);
+        const slots = openSlots(snapshot, service, date, staff, args.earliest_time, args.latest_time, existing?.id);
         if (slots.length) days.push({ date, day: spokenTime(slots[0].start).split(",")[0], open_times: describe(slots, 6), more_available: Math.max(0, slots.length - 6) });
       }
-      return { service: service.name, next_openings: days, ...(days.length ? {} : { note: "No openings in the booking window." }) };
+      return { service: service.name, next_openings: days, ...(days.length ? {} : { note: horizon < snapshot.state.business.rules.maxAdvanceDays ? `No openings in the next ${horizon} days. Ask for a later date to check.` : "No openings in the booking window." }) };
     },
   },
   {
@@ -230,20 +247,21 @@ export const voiceTools: ToolDefinition[] = [
         return {
           booked: true, ...bookingSummary(saved.state, booking),
           ...(booking.requiredAmount ? { payment: paymentSummary(saved.state, booking) } : {}),
-          instruction: "Tell the caller they are booked and read the booking reference slowly in groups of four characters.",
+          instruction: booking.status === "Pending" ? "Explain that the time is reserved pending payment and state the amount required. Read the reference slowly in groups of four characters." : "Confirm the booking and read the reference slowly in groups of four characters.",
         };
       });
     },
   },
   {
     name: "find_my_bookings",
-    description: "Find the caller's upcoming bookings using the number they are calling from (or the booking this call is about). Use before cancelling, rescheduling or answering questions about an existing booking.",
-    parameters: object({}),
-    async run(ctx, _args, now) {
+    description: "Find upcoming bookings using the caller's number. Pass a reference supplied by the caller or the outbound call context to retrieve that exact booking, including a cancelled booking. Confirm identity before discussing personal details.",
+    parameters: object({ booking_reference: str("Optional booking reference supplied by the caller or outbound call context") }),
+    async run(ctx, raw, now) {
+      const args = z.object({ booking_reference: codeArg.optional() }).parse(raw);
       const { state } = await workspaces.read(ctx.businessId);
-      const bookings = callerBookings(state, ctx, now);
+      const bookings = args.booking_reference ? [bookingByCode(state, args.booking_reference)] : callerBookings(state, ctx, now);
       if (!bookings.length) return { bookings: [], note: ctx.customerPhone ? "No upcoming bookings for this phone number. Ask for their booking reference instead." : "The caller's number is hidden. Ask for their booking reference." };
-      return { customer_name: state.customers.find(c => c.id === bookings[0].customerId)?.name, bookings: bookings.slice(0, 5).map(b => bookingSummary(state, b)) };
+      return { bookings: bookings.slice(0, 5).map(b => ({ ...bookingSummary(state, b), customer_name: state.customers.find(c => c.id === b.customerId)?.name, upcoming: ACTIVE.includes(b.status) && appointmentTimestamp(b.startTime) > now })) };
     },
   },
   {
@@ -301,11 +319,12 @@ export const voiceTools: ToolDefinition[] = [
     name: "confirm_attendance",
     description: "Record that the customer confirmed they will attend. Use on reminder calls when the customer says they are coming.",
     parameters: object({ booking_reference: str("12-character booking reference") }, ["booking_reference"]),
-    async run(ctx, raw) {
+    async run(ctx, raw, now) {
       const { booking_reference } = z.object({ booking_reference: codeArg }).parse(raw);
       return withLatest(ctx.businessId, async snapshot => {
         const booking = bookingByCode(snapshot.state, booking_reference);
         if (!ACTIVE.includes(booking.status)) throw new HttpError(409, `This booking is ${booking.status.toLowerCase()}.`);
+        if (appointmentTimestamp(booking.startTime) <= now) throw new HttpError(409, "This appointment has already started or passed.");
         booking.activity.push({ id: randomUUID(), title: "Customer confirmed attendance", detail: "Confirmed by phone", time: new Date().toISOString(), actor: "agent" });
         // Payment-dependent statuses stay as they are; attendance only resolves an explicit confirmation request.
         if (booking.status === "Needs confirmation") booking.status = "Confirmed";
@@ -315,12 +334,33 @@ export const voiceTools: ToolDefinition[] = [
       });
     },
   },
+  {
+    name: "stop_customer_calls",
+    description: "Stop future outbound calls to the verified phone number on this call when the recipient says it is a wrong number or asks not to be called again. Does not cancel any bookings. Never use for someone who is just busy.",
+    parameters: object({}),
+    async run(ctx) {
+      if (!ctx.customerPhone) throw new HttpError(400, "The caller's number is hidden. Ask them to contact the business to update their call preferences.");
+      return withLatest(ctx.businessId, async snapshot => {
+        const customers = snapshot.state.customers.filter(c => phoneKey(c.phone) === phoneKey(ctx.customerPhone!));
+        if (!customers.length) {
+          const contact = { id: randomUUID(), name: "Phone contact", phone: ctx.customerPhone!, notes: "", voiceCallsBlocked: true };
+          snapshot.state.customers.push(contact);
+          customers.push(contact);
+        }
+        for (const customer of customers) customer.voiceCallsBlocked = true;
+        await workspaces.save(ctx.businessId, snapshot.revision, snapshot.state);
+        return { calls_stopped: true, instruction: "Acknowledge that future calls to this number are stopped. No bookings were cancelled." };
+      });
+    },
+  },
 ];
 
 /** Runs a tool and converts expected failures into messages the agent can relay. */
 export async function runVoiceTool(name: string, ctx: VoiceCallContext, args: unknown, now = Date.now()): Promise<ToolResult> {
   const tool = voiceTools.find(t => t.name === name);
   if (!tool) return { error: "Unknown tool" };
+  if (ctx.testCall && !["get_business_info", "list_services", "check_availability"].includes(name))
+    return { error: "This is a practice call. Do not access or change real customer bookings, payments or call preferences." };
   try {
     return await tool.run(ctx, args ?? {}, now);
   } catch (error) {

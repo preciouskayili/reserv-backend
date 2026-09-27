@@ -139,7 +139,7 @@ export const stateSchema = z.object({
     )
     .max(500),
   customers: z
-    .array(z.object({ id, name: text, phone: text, notes: text }))
+    .array(z.object({ id, name: text, phone: text, notes: text, voiceCallsBlocked: z.boolean().optional() }))
     .max(20000),
   bookings: z
     .array(

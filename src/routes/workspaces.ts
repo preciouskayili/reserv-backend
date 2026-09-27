@@ -42,10 +42,8 @@ router.post("/", async (req: AuthenticatedRequest, res) => {
     );
   if (parsed.data.voiceCountry && !(await numberCountries()).some(country => country.code === parsed.data.voiceCountry))
     throw new HttpError(400, "Choose a supported phone-number country.");
-  const result = await workspaces.create(
-    req.user!.id,
-    initialState(parsed.data),
-  );
+  const state = initialState(parsed.data);
+  const result = await workspaces.create(req.user!.id, state);
   if (parsed.data.voiceCountry) void provisionBusinessNumber(result.state.business.id).catch(() => console.error("Business phone setup needs review", result.state.business.id));
   res.status(201).json(result);
 });
