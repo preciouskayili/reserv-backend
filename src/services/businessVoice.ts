@@ -6,8 +6,10 @@ import { agentFingerprint, agentSettings, isVoiceToolsConfigured, syncAgent } fr
 
 export const isNumberProvisioningConfigured = () => ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "AETHEX_API_KEY", "AETHEX_AGENT_ID"].every(key => Boolean(process.env[key]?.trim()));
 class ProviderError extends Error {
-  constructor(public status: number, public code?: number) { super(`Phone provider returned HTTP ${status}`); }
+  /** detail is the provider's own error text, for server logs only. */
+  constructor(public status: number, public code?: number, public detail?: string) { super(`Phone provider returned HTTP ${status}`); }
 }
+const describeError = (error: unknown) => error instanceof ProviderError ? `HTTP ${error.status}${error.detail ? `: ${error.detail}` : ""}` : error instanceof Error ? error.message : "unknown error";
 async function twilio(path: string, body?: Record<string, string>): Promise<any> {
   const sid = process.env.TWILIO_ACCOUNT_SID!.trim();
   const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/${path}`, {
@@ -22,7 +24,12 @@ async function twilio(path: string, body?: Record<string, string>): Promise<any>
 async function aethexAdmin(path: string, method = "GET", body?: unknown): Promise<any> {
   const base = process.env.AETHEX_API_BASE_URL?.replace(/\/+$/, "") || "https://api.aethexai.com/api/v1";
   const response = await fetch(`${base}${path}`, { method, headers: { "X-API-Key": process.env.AETHEX_API_KEY!.trim(), "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
-  if (!response.ok) throw new ProviderError(response.status);
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    let message = detail;
+    try { message = JSON.parse(detail).error ?? detail; } catch {}
+    throw new ProviderError(response.status, undefined, String(message).slice(0, 300));
+  }
   const text = await response.text();
   return text ? JSON.parse(text) : null;
 }
@@ -78,6 +85,23 @@ export async function numberCountries(): Promise<NumberCountry[]> {
   countryCache = { countries, expires: Date.now() + 3600000 };
   return countries;
 }
+/** A workspace counts against the one-number-per-account limit once it holds, is buying, or is setting up a number. */
+const claimsNumber = (voice?: BusinessVoice) => Boolean(voice && (voice.number || voice.twilioSid || voice.purchaseStarted || ["queued", "provisioning", "active", "needs_review"].includes(voice.status)));
+const purchasedNumber = (voice?: BusinessVoice) => Boolean(voice && (voice.number || voice.twilioSid || voice.purchaseStarted));
+async function ownerNumberElsewhere(workspaceIds: string[], claim: (voice?: BusinessVoice) => boolean): Promise<string | undefined> {
+  for (const id of workspaceIds) {
+    const { state } = await workspaces.read(id).catch(() => ({ state: undefined }));
+    if (state && claim(state.business.voice)) return state.business.name;
+  }
+  return undefined;
+}
+const limitMessage = (name: string) => `Your account already has a business number on ${name}. Each account can have one number.`;
+/** Refuses a new number when the requesting owner already has one on another workspace. */
+export async function assertAccountNumberAvailable(userId: string, exceptId?: string): Promise<void> {
+  const owned = (await workspaces.list(userId)).filter(w => w.role === "owner" && w.id !== exceptId).map(w => w.id);
+  const elsewhere = await ownerNumberElsewhere(owned, claimsNumber);
+  if (elsewhere) throw new HttpError(409, limitMessage(elsewhere));
+}
 export function publicVoice(voice?: BusinessVoice) {
   if (!voice) return null;
   return { country: voice.country, status: voice.status, number: voice.status === "active" ? voice.number : undefined, error: voice.error, voiceId: voice.voiceId };
@@ -113,13 +137,14 @@ export async function chooseAgentVoice(id: string, voiceId: string, deps: Pick<P
   }
   throw new HttpError(409, "The workspace changed while saving the voice. Try again.");
 }
-export async function requestBusinessNumber(id: string, country: string): Promise<Snapshot> {
+export async function requestBusinessNumber(id: string, country: string, userId?: string): Promise<Snapshot> {
   const snapshot = await workspaces.read(id);
   const previous = snapshot.state.business.voice;
   if (previous && (previous.status === "active" || previous.status === "provisioning" || previous.purchaseStarted || previous.twilioSid)) {
     if (previous.country !== country) throw new HttpError(409, "A number has already been requested for this business. Contact support to change its country.");
     return snapshot;
   }
+  if (userId) await assertAccountNumberAvailable(userId, id);
   if (!(await numberCountries()).some(c => c.code === country)) throw new HttpError(400, "Choose a supported phone-number country.");
   return workspaces.save(id, snapshot.revision, { ...snapshot.state, business: { ...snapshot.state.business, voice: { ...previous, selectedNumber: previous?.country === country ? previous.selectedNumber : undefined, country, status: "queued", error: undefined } } });
 }
@@ -132,6 +157,8 @@ export interface ProvisionDependencies {
   findAgent: (businessId: string) => Promise<string | undefined>;
   createAgent: (snapshot: Snapshot) => Promise<string>;
   register: (number: string, agentId: string) => Promise<string>;
+  /** Name of another workspace, sharing an owner, that already bought or is buying a number. */
+  numberElsewhere: (businessId: string) => Promise<string | undefined>;
 }
 const live: ProvisionDependencies = {
   read: id => workspaces.read(id), save: (id, revision, state) => workspaces.save(id, revision, state),
@@ -161,13 +188,17 @@ const live: ProvisionDependencies = {
   async createAgent(snapshot) {
     const business = snapshot.state.business;
     const template = await aethexAdmin(`/agents/${encodeURIComponent(process.env.AETHEX_AGENT_ID!.trim())}`);
+    // The webhook is applied by syncAgent on its own, so an account-level webhook problem cannot block agent creation.
+    const { webhook_url: _webhook, ...settings } = agentSettings(snapshot.state);
     const agent = await aethexAdmin("/agents", "POST", {
       name: `${business.name} — Reserv`, voice_id: template.voice_id, language: template.language || "english",
-      ...agentSettings(snapshot.state),
+      ...settings,
       metadata: { reserv_business_id: business.id }, public_access: false, recording_enabled: false, transcription_enabled: true,
     });
     if (!agent.id) throw new Error("Agent creation response was incomplete");
-    await syncAgent({ request: aethexAdmin }, agent.id, snapshot.state);
+    // The agent exists now; a failed sync is retried by the background worker because agentConfig stays unset.
+    await syncAgent({ request: aethexAdmin }, agent.id, snapshot.state).catch(error =>
+      console.error("[Business phone] New agent sync incomplete; the background sync will retry.", { businessId: business.id, error: describeError(error) }));
     return agent.id;
   },
   async register(number, agentId) {
@@ -182,6 +213,7 @@ const live: ProvisionDependencies = {
     if (verified.status !== "active" || !verified.outbound_enabled || verified.agent_id !== agentId) throw new Error("The number is not active yet.");
     return verified.id;
   },
+  async numberElsewhere(businessId) { return ownerNumberElsewhere(await workspaces.ownerSiblings(businessId), purchasedNumber); },
 };
 export async function provisionBusinessNumber(id: string, deps = live): Promise<void> {
   let snapshot = await deps.read(id);
@@ -209,7 +241,7 @@ export async function provisionBusinessNumber(id: string, deps = live): Promise<
       const found = await deps.findAgent(id);
       if (found) await patch({ agentId: found });
       else {
-        if (voice.agentStarted) throw new Error("Agent creation needs review before retrying.");
+        // Agents cost nothing and findAgent above would have found one that was created, so creation is safe to retry.
         await patch({ agentStarted: true });
         await patch({ agentId: await deps.createAgent(snapshot) });
       }
@@ -225,6 +257,8 @@ export async function provisionBusinessNumber(id: string, deps = live): Promise<
       if (owned) await patch({ number: owned.number, twilioSid: owned.sid });
       else {
         if (voice.purchaseStarted) throw new Error("The previous number purchase needs review. No additional number will be purchased.");
+        const elsewhere = await deps.numberElsewhere(id);
+        if (elsewhere) throw new Error(limitMessage(elsewhere));
         await patch({ purchaseStarted: true });
         let purchased;
         try { purchased = await deps.buyNumber(voice.selectedNumber!, id); }
@@ -241,7 +275,8 @@ export async function provisionBusinessNumber(id: string, deps = live): Promise<
     const registration = await deps.register(voice.number!, voice.agentId!);
     await patch({ aethexNumberId: registration, status: "active", lockToken: undefined, lockUntil: undefined, error: undefined });
   } catch (error) {
-    await patch({ status: voice.purchaseStarted || voice.twilioSid || voice.agentStarted && !voice.agentId ? "needs_review" : "failed", error: error instanceof ProviderError ? "Phone setup could not be completed. Check the provider connection and retry." : error instanceof Error ? error.message : "Phone setup failed", lockToken: undefined, lockUntil: undefined });
+    console.error("[Business phone] Setup failed", { businessId: id, error: describeError(error) });
+    await patch({ status: voice.purchaseStarted || voice.twilioSid ? "needs_review" : "failed", error: error instanceof ProviderError ? "Phone setup could not be completed. Check the provider connection and retry." : error instanceof Error ? error.message : "Phone setup failed", lockToken: undefined, lockUntil: undefined });
   }
 }
 const syncBackoff = new Map<string, number>();
@@ -267,9 +302,9 @@ export async function syncBusinessAgent(id: string, deps: Pick<ProvisionDependen
       } catch (error) { if (!(error instanceof HttpError && error.status === 409)) throw error; }
     }
     return true;
-  } catch {
+  } catch (error) {
     syncBackoff.set(id, Date.now() + 15 * 60000);
-    console.error("[Business phone] Agent update failed; retrying in 15 minutes.", { businessId: id });
+    console.error("[Business phone] Agent update failed; retrying in 15 minutes.", { businessId: id, error: describeError(error) });
     return false;
   }
 }

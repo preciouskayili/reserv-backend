@@ -119,7 +119,8 @@ test('agent sync updates the prompt and tools, and removes only stale tools this
   await syncAgent(api, 'agent-1', businessState);
   const agentPatch = requests.find(r => r.path === '/agents/agent-1' && r.method === 'PATCH').body;
   assert.equal(agentPatch.transfer_phone_number, '+2348031112222');
-  assert.equal(agentPatch.webhook_url, 'https://api.example.test/api/calls/webhook');
+  assert.equal(agentPatch.webhook_url, undefined);
+  assert.deepEqual(requests.at(-1), { path: '/agents/agent-1', method: 'PATCH', body: { webhook_url: 'https://api.example.test/api/calls/webhook' } });
   assert.match(agentPatch.system_prompt, /create_booking/);
   assert.equal(requests.filter(r => r.method === 'POST').length, toolDefinitions(businessState.business.id).length - 1);
   assert.ok(requests.some(r => r.method === 'PATCH' && r.path.endsWith('/tools/t1')));

@@ -142,7 +142,15 @@ export interface AgentApi {
 /** Brings a business agent's prompt, voice, business details, transfer number, webhook and tools up to date. Safe to repeat. */
 export async function syncAgent(api: AgentApi, agentId: string, state: AgentState): Promise<void> {
   const agentPath = `/agents/${encodeURIComponent(agentId)}`;
-  await api.request(agentPath, "PATCH", agentSettings(state));
+  // Aethex rejects webhook_url until the account has a webhook signing secret. It is sent last and alone,
+  // so that account setting never keeps the prompt, voice or booking tools from reaching the agent.
+  const { webhook_url, ...settings } = agentSettings(state);
+  await api.request(agentPath, "PATCH", settings);
+  await syncTools(api, agentPath, state);
+  if (webhook_url) await api.request(agentPath, "PATCH", { webhook_url });
+}
+
+async function syncTools(api: AgentApi, agentPath: string, state: AgentState): Promise<void> {
   const wanted = toolDefinitions(state.business.id);
   if (!wanted.length) return;
   const existing = await api.request(`${agentPath}/tools`);

@@ -276,6 +276,29 @@ export const workspaces = {
     return data;
   },
 
+  /** Other workspaces owned by this workspace's owners; the phone-number limit applies per owner account. */
+  async ownerSiblings(businessId: string): Promise<string[]> {
+    if (testing()) {
+      const owners = [...testMembers].filter(([, ids]) => ids.has(businessId));
+      return [...new Set(owners.flatMap(([, ids]) => [...ids]))].filter((id) => id !== businessId);
+    }
+    const { data: owners, error } = await db()
+      .from("workspace_members")
+      .select("user_id")
+      .eq("business_id", businessId)
+      .eq("role", "owner");
+    if (error) failure(error);
+    const userIds = (owners ?? []).map((row: any) => row.user_id);
+    if (!userIds.length) return [];
+    const { data, error: siblingsError } = await db()
+      .from("workspace_members")
+      .select("business_id")
+      .in("user_id", userIds)
+      .eq("role", "owner");
+    if (siblingsError) failure(siblingsError);
+    return [...new Set((data ?? []).map((row: any) => row.business_id as string))].filter((id) => id !== businessId);
+  },
+
   async all(): Promise<Snapshot[]> {
     if (testing()) return structuredClone([...testStore.values()]);
     const { data, error } = await db()

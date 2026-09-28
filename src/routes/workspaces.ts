@@ -4,6 +4,7 @@ import {
   requestBusinessNumber,
   provisionBusinessNumber,
   publicVoice,
+  assertAccountNumberAvailable,
   voiceCatalog,
   chooseAgentVoice,
   syncBusinessAgent,
@@ -60,7 +61,7 @@ router.post("/:id/voice", async (req: AuthenticatedRequest, res) => {
     .safeParse(req.body.country);
   if (!country.success)
     throw new HttpError(400, "Choose a phone-number country.");
-  const snapshot = await requestBusinessNumber(id, country.data);
+  const snapshot = await requestBusinessNumber(id, country.data, req.user!.id);
   void provisionBusinessNumber(id).catch(() =>
     console.error("Business phone setup needs review", id),
   );
@@ -80,6 +81,7 @@ router.post("/", async (req: AuthenticatedRequest, res) => {
     )
   )
     throw new HttpError(400, "Choose a supported phone-number country.");
+  if (parsed.data.voiceCountry) await assertAccountNumberAvailable(req.user!.id);
   const state = initialState(parsed.data);
   const result = await workspaces.create(req.user!.id, state);
   if (parsed.data.voiceCountry)

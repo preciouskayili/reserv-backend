@@ -21,6 +21,7 @@ function fixture() {
     ownedNumber: async () => null,
     buyNumber: async number => { purchases++; return { number, sid: 'twilio-number' }; },
     register: async () => { registrations++; return 'aethex-number'; },
+    numberElsewhere: async () => undefined,
   };
   return { deps, id: snapshot.state.business.id, snapshot: () => snapshot, counts: () => ({ purchases, agents, registrations }) };
 }
@@ -140,4 +141,50 @@ test('a chosen voice is validated, saved without touching other phone state, and
   delete state.state.business.voice;
   await empty.deps.save(empty.id, state.revision, state.state);
   await assert.rejects(chooseAgentVoice(empty.id, 'kemi', empty.deps, catalog), error => error instanceof HttpError && error.status === 409);
+});
+
+test('a failed agent creation is retried instead of sticking in review', async () => {
+  const h = fixture(); let attempts = 0;
+  h.deps.createAgent = async () => { attempts++; if (attempts === 1) throw new Error('Provider rejected the agent'); return 'agent'; };
+  await provisionBusinessNumber(h.id, h.deps);
+  assert.equal(h.snapshot().state.business.voice.status, 'failed');
+  const retry = await h.deps.read(h.id);
+  retry.state.business.voice.status = 'queued';
+  await h.deps.save(h.id, retry.revision, retry.state);
+  await provisionBusinessNumber(h.id, h.deps);
+  assert.equal(h.snapshot().state.business.voice.status, 'active');
+  assert.equal(attempts, 2);
+});
+
+test('no number is bought when the owner account already has one on another workspace', async () => {
+  const h = fixture();
+  h.deps.numberElsewhere = async () => 'Kingz Cuts';
+  await provisionBusinessNumber(h.id, h.deps);
+  const voice = h.snapshot().state.business.voice;
+  assert.equal(h.counts().purchases, 0);
+  assert.equal(voice.status, 'failed');
+  assert.equal(voice.purchaseStarted, undefined);
+  assert.match(voice.error, /already has a business number on Kingz Cuts/);
+});
+
+test('a rejected webhook does not stop the prompt and tools from reaching the agent', async () => {
+  process.env.AETHEX_PUBLIC_WEBHOOK_URL = 'https://reserv.example/api/calls/webhook';
+  process.env.VOICE_TOOLS_SECRET = 'test-secret';
+  try {
+    const { syncAgent } = await import('../dist/services/voiceAgent.js');
+    const h = fixture();
+    const requests = [];
+    const api = { request: async (path, method, body) => {
+      requests.push({ path, method, body });
+      if (body && 'webhook_url' in body) throw new Error('Create a webhook signing secret first');
+      return [];
+    } };
+    await assert.rejects(syncAgent(api, 'agent', h.snapshot().state), /signing secret/);
+    assert.equal(requests[0].method, 'PATCH');
+    assert.equal('webhook_url' in requests[0].body, false);
+    assert.ok(requests.filter(r => r.method === 'POST' && r.path.endsWith('/tools')).length > 5, 'tools registered before the webhook');
+    assert.deepEqual(requests.at(-1).body, { webhook_url: 'https://reserv.example/api/calls/webhook' });
+  } finally {
+    delete process.env.AETHEX_PUBLIC_WEBHOOK_URL; delete process.env.VOICE_TOOLS_SECRET;
+  }
 });
