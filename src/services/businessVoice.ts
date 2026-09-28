@@ -346,35 +346,22 @@ export interface NumberCountry {
   name: string;
   dialCode?: string;
 }
-let countryCache: { expires: number; countries: NumberCountry[] } | undefined;
+/**
+ * Business numbers are US only: Twilio sells US numbers without business verification,
+ * and does not offer Nigerian numbers at all.
+ */
+export const NUMBER_COUNTRY: NumberCountry = {
+  code: "US",
+  name: "United States",
+  dialCode: "1",
+};
 export async function numberCountries(): Promise<NumberCountry[]> {
   if (!isNumberProvisioningConfigured())
     throw new HttpError(503, "Business phone setup is not configured.");
-  if (countryCache && countryCache.expires > Date.now())
-    return countryCache.countries;
-  const countries: NumberCountry[] = [];
-  let page = "AvailablePhoneNumbers.json?PageSize=1000";
-  while (page) {
-    const value = await twilio(page);
-    for (const country of value.countries ?? []) {
-      if (country.subresource_uris?.local || country.subresource_uris?.mobile)
-        countries.push({
-          code: country.country_code,
-          name: country.country,
-          dialCode: dialCodes[country.country_code],
-        });
-    }
-    // Construct the relative path ourselves; never forward credentials to a provider-supplied host.
-    page = value.next_page_uri
-      ? String(value.next_page_uri).split(
-          `/Accounts/${process.env.TWILIO_ACCOUNT_SID!.trim()}/`,
-        )[1]
-      : "";
-  }
-  countries.sort((a, b) => a.name.localeCompare(b.name));
-  countryCache = { countries, expires: Date.now() + 3600000 };
-  return countries;
+  return [NUMBER_COUNTRY];
 }
+const US_ONLY =
+  "Business numbers are available in the United States only. Set up a US number instead.";
 /** A workspace counts against the one-number-per-account limit once it holds, is buying, or is setting up a number. */
 const claimsNumber = (voice?: BusinessVoice) =>
   Boolean(
@@ -402,15 +389,22 @@ async function ownerNumberElsewhere(
 }
 const limitMessage = (name: string) =>
   `Your account already has a business number on ${name}. Each account can have one number.`;
+/** Name of a workspace the user owns that already holds or is setting up the account's number. */
+export async function accountNumberWorkspace(
+  userId: string,
+  exceptId?: string,
+): Promise<string | undefined> {
+  const owned = (await workspaces.list(userId))
+    .filter((w) => w.role === "owner" && w.id !== exceptId)
+    .map((w) => w.id);
+  return ownerNumberElsewhere(owned, claimsNumber);
+}
 /** Refuses a new number when the requesting owner already has one on another workspace. */
 export async function assertAccountNumberAvailable(
   userId: string,
   exceptId?: string,
 ): Promise<void> {
-  const owned = (await workspaces.list(userId))
-    .filter((w) => w.role === "owner" && w.id !== exceptId)
-    .map((w) => w.id);
-  const elsewhere = await ownerNumberElsewhere(owned, claimsNumber);
+  const elsewhere = await accountNumberWorkspace(userId, exceptId);
   if (elsewhere) throw new HttpError(409, limitMessage(elsewhere));
 }
 export function publicVoice(voice?: BusinessVoice) {
@@ -537,7 +531,7 @@ export async function requestBusinessNumber(
   }
   if (userId) await assertAccountNumberAvailable(userId, id);
   if (!(await numberCountries()).some((c) => c.code === country))
-    throw new HttpError(400, "Choose a supported phone-number country.");
+    throw new HttpError(400, US_ONLY);
   return workspaces.save(id, snapshot.revision, {
     ...snapshot.state,
     business: {
@@ -750,6 +744,9 @@ export async function provisionBusinessNumber(
     throw error;
   }
   try {
+    // Setups queued before numbers became US only must never buy a number elsewhere.
+    if (!voice.twilioSid && !voice.purchaseStarted && voice.country !== NUMBER_COUNTRY.code)
+      throw new Error(US_ONLY);
     if (!voice.agentId) {
       const found = await deps.findAgent(id);
       if (found) await patch({ agentId: found });
@@ -764,7 +761,7 @@ export async function provisionBusinessNumber(
         const found = await deps.findNumber(voice.country);
         if (!found)
           throw new Error(
-            "No voice numbers are currently available in this country. Choose another country or retry later.",
+            "No US numbers are available right now. Retry in a few minutes.",
           );
         if (found.requiresVerification)
           throw new Error(

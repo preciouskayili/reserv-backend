@@ -4,7 +4,9 @@ import {
   requestBusinessNumber,
   provisionBusinessNumber,
   publicVoice,
-  assertAccountNumberAvailable,
+  accountNumberWorkspace,
+  isNumberProvisioningConfigured,
+  NUMBER_COUNTRY,
   voiceCatalog,
   chooseAgentVoice,
   syncBusinessAgent,
@@ -74,17 +76,16 @@ router.post("/", async (req: AuthenticatedRequest, res) => {
       400,
       parsed.error.issues[0]?.message || "Check your business details",
     );
-  if (
-    parsed.data.voiceCountry &&
-    !(await numberCountries()).some(
-      (country) => country.code === parsed.data.voiceCountry,
-    )
-  )
-    throw new HttpError(400, "Choose a supported phone-number country.");
-  if (parsed.data.voiceCountry) await assertAccountNumberAvailable(req.user!.id);
-  const state = initialState(parsed.data);
+  // Every new workspace gets the account's one US number automatically, unless the
+  // account already has a number on another workspace. Any client-sent country is ignored.
+  const voiceCountry =
+    isNumberProvisioningConfigured() &&
+    !(await accountNumberWorkspace(req.user!.id))
+      ? NUMBER_COUNTRY.code
+      : undefined;
+  const state = initialState({ ...parsed.data, voiceCountry });
   const result = await workspaces.create(req.user!.id, state);
-  if (parsed.data.voiceCountry)
+  if (voiceCountry)
     void provisionBusinessNumber(result.state.business.id).catch(() =>
       console.error(
         "Business phone setup needs review",
