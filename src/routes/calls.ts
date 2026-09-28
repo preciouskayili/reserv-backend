@@ -8,6 +8,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { rateLimit } from "express-rate-limit";
 import { businessCallConfig } from "../services/businessVoice.js";
+import { currentTime } from "../services/callBriefing.js";
 import { HttpError } from "../domain/workspace.js";
 import { refreshCallStatus, refreshCallList } from "../services/callStatus.js";
 import { aethex, normalizeE164 } from "../lib/aethex.js";
@@ -152,6 +153,7 @@ router.post(
           call_type: callType,
           booking_code: "not provided",
           test_call: testCall,
+          current_time: currentTime(Date.now()),
         };
 
       const metadata: Record<string, unknown> = {

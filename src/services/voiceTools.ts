@@ -5,6 +5,7 @@ import type { AppState, Booking, Service, StaffMember } from "../domain/model.js
 import { workspaces, type Snapshot } from "./workspaces.js";
 import { changeReservation, checkSlot, createReservation, phoneKey } from "./reservations.js";
 import { appointmentTimestamp } from "./callContext.js";
+import { bookingSummary, businessInfo, localNow, paymentSummary, serviceCatalog, spokenTime } from "./callBriefing.js";
 
 /** The verified call a tool request belongs to. Only the phone network sets these values, never the caller. */
 export interface VoiceCallContext {
@@ -19,14 +20,6 @@ export interface VoiceCallContext {
 
 export type ToolResult = Record<string, unknown>;
 
-// Appointments are scheduled in WAT (UTC+01:00), matching the rest of the application.
-const OFFSET = "+01:00";
-const stamp = (local: string) => Date.parse(`${local.length === 16 ? `${local}:00` : local}${OFFSET}`);
-const localNow = (now: number) => new Date(now + 3600000).toISOString().slice(0, 16);
-const dayFormat = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Lagos", weekday: "long", day: "numeric", month: "long" });
-const timeFormat = new Intl.DateTimeFormat("en-US", { timeZone: "Africa/Lagos", hour: "numeric", minute: "2-digit" });
-export const spokenTime = (local: string) => `${dayFormat.format(stamp(local))}, ${timeFormat.format(stamp(local))}`;
-const naira = (amount: number) => `₦${amount.toLocaleString("en-NG")}`;
 const ACTIVE = ["Confirmed", "Pending", "Needs confirmation", "Rescheduled"];
 
 const dateArg = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD for dates").refine(value => {
@@ -82,35 +75,6 @@ export function openSlots(snapshot: Snapshot, service: Service, date: string, st
   return slots;
 }
 
-function bookingSummary(state: AppState, booking: Booking) {
-  const service = state.services.find(s => s.id === booking.serviceId);
-  const staff = state.staff.find(m => m.id === booking.staffId);
-  return {
-    booking_reference: booking.code,
-    service: service?.name ?? "Service",
-    specialist: staff?.name,
-    start_time: booking.startTime.slice(0, 16),
-    when: spokenTime(booking.startTime.slice(0, 16)),
-    status: booking.status,
-  };
-}
-
-function paymentSummary(state: AppState, booking: Booking) {
-  const payments = (state.payments ?? []).filter(p => p.bookingId === booking.id);
-  const paid = payments.filter(p => p.status === "approved" && !p.disputed).reduce((sum, p) => sum + Math.max(0, p.amount - (p.refundedAmount ?? 0)), 0);
-  const service = state.services.find(s => s.id === booking.serviceId);
-  const total = booking.totalAmount ?? service?.price ?? 0, required = booking.requiredAmount ?? Math.min(total, service?.deposit || total);
-  return {
-    total_price: naira(total),
-    amount_required_before_appointment: naira(required),
-    amount_paid: naira(paid),
-    outstanding_to_secure_booking: naira(Math.max(0, required - paid)),
-    remaining_balance: naira(Math.max(0, total - paid)),
-    receipt_under_review: payments.some(p => p.status === "review"),
-    payment_policy: state.business.depositPolicy,
-  };
-}
-
 /** Retries a read-modify-save when another session saved the workspace first. */
 async function withLatest<T>(businessId: string, change: (snapshot: Snapshot) => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
@@ -155,33 +119,18 @@ const str = (description: string) => ({ type: "string", description });
 export const voiceTools: ToolDefinition[] = [
   {
     name: "get_business_info",
-    description: "Get the business's address and directions, opening hours, phone number, policies, FAQs, and the current date and time. Use for any question about location, hours or policies, and whenever you need today's date.",
+    description: "Get the business's latest address, opening hours, phone number, policies, FAQs, and the current date and time. The business profile and current time are already in your instructions; only use this when something you need is missing there.",
     parameters: object({}),
     async run(ctx, _args, now) {
-      const { state } = await workspaces.read(ctx.businessId);
-      const b = state.business;
-      return {
-        name: b.name, description: b.description, address: b.address, phone: b.phone,
-        opening_hours: b.hours.map(h => h.closed ? `${h.day}: closed` : `${h.day}: ${h.open}–${h.close}`),
-        booking_policy: b.bookingPolicy, cancellation_policy: b.cancellationPolicy, payment_policy: b.depositPolicy,
-        faqs: b.faqs, current_local_time: localNow(now), today: spokenTime(localNow(now)).split(",")[0], timezone: "West Africa Time (UTC+1)",
-        booking_notice: `Bookings need at least ${b.rules.minNoticeMinutes} minutes' notice and can be made up to ${b.rules.maxAdvanceDays} days ahead.`,
-      };
+      return businessInfo((await workspaces.read(ctx.businessId)).state, now);
     },
   },
   {
     name: "list_services",
-    description: "List the services offered, with prices in Naira, durations, deposits and which specialists provide each.",
+    description: "List the services offered, with prices in Naira, durations, deposits and which specialists provide each. The services list is already in your instructions; only use this when a service you need is missing there.",
     parameters: object({}),
     async run(ctx) {
-      const { state } = await workspaces.read(ctx.businessId);
-      return {
-        services: state.services.filter(s => s.active).map(s => ({
-          name: s.name, description: s.description, duration_minutes: s.duration, price: naira(s.price),
-          deposit: s.deposit ? naira(s.deposit) : "none", specialists: state.staff.filter(m => s.staffIds.includes(m.id)).map(m => m.name),
-          amount_required_to_secure_booking: naira(s.deposit || s.price),
-        })),
-      };
+      return { services: serviceCatalog((await workspaces.read(ctx.businessId)).state) };
     },
   },
   {

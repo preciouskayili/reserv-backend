@@ -116,7 +116,7 @@ test('agent sync updates the prompt and tools, and removes only stale tools this
     ];
     return {};
   } };
-  await syncAgent(api, 'agent-1', businessState.business);
+  await syncAgent(api, 'agent-1', businessState);
   const agentPatch = requests.find(r => r.path === '/agents/agent-1' && r.method === 'PATCH').body;
   assert.equal(agentPatch.transfer_phone_number, '+2348031112222');
   assert.equal(agentPatch.webhook_url, 'https://api.example.test/api/calls/webhook');
@@ -127,8 +127,8 @@ test('agent sync updates the prompt and tools, and removes only stale tools this
   const tool = toolDefinitions(businessState.business.id)[0];
   assert.equal(tool.headers['X-Reserv-Tool-Key'], toolKey(businessState.business.id));
   assert.ok(tool.endpoint_url.startsWith(`https://api.example.test/api/voice/tools/${businessState.business.id}/`));
-  const before = agentFingerprint(businessState.business);
-  assert.notEqual(agentFingerprint({ ...businessState.business, phone: '08039998888' }), before, 'a new transfer number triggers a re-sync');
+  const before = agentFingerprint(businessState);
+  assert.notEqual(agentFingerprint({ ...businessState, business: { ...businessState.business, phone: '08039998888' } }), before, 'a new transfer number triggers a re-sync');
 });
 
 test('inbound call-ended events carry what is needed to create their call record', () => {

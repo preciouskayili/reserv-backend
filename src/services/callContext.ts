@@ -1,6 +1,7 @@
 import type { AppState, Booking } from "../domain/model.js";
 import { HttpError } from "../domain/workspace.js";
 import { normalizeE164 } from "../lib/aethex.js";
+import { bookingBrief, currentTime } from "./callBriefing.js";
 
 export type OutboundCallType = "reminder" | "confirmation" | "unpaid_checkin" | "manual";
 export const appointmentTimestamp = (value: string) => Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}+01:00`);
@@ -39,6 +40,9 @@ export function bookingCallContext(state: AppState, booking: Booking, type: Outb
       call_type: type,
       booking_code: booking.code,
       test_call: false,
+      // Read at dial time so the agent can state the reason for calling without a mid-call lookup.
+      booking_details: bookingBrief(state, booking),
+      current_time: currentTime(now),
     },
   };
 }

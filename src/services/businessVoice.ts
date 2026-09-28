@@ -80,7 +80,38 @@ export async function numberCountries(): Promise<NumberCountry[]> {
 }
 export function publicVoice(voice?: BusinessVoice) {
   if (!voice) return null;
-  return { country: voice.country, status: voice.status, number: voice.status === "active" ? voice.number : undefined, error: voice.error };
+  return { country: voice.country, status: voice.status, number: voice.status === "active" ? voice.number : undefined, error: voice.error, voiceId: voice.voiceId };
+}
+export interface AgentVoice { id: string; name: string; gender: string; country?: string; description?: string; tags: string[]; previewUrl?: string; }
+let voiceCache: { expires: number; voices: AgentVoice[]; defaultVoiceId?: string } | undefined;
+/** English voices only: the receptionist prompt is English, and Aethex warns that mismatched voices mix accents. */
+export async function voiceCatalog(): Promise<{ voices: AgentVoice[]; defaultVoiceId?: string }> {
+  if (!process.env.AETHEX_API_KEY?.trim()) throw new HttpError(503, "Voice calling is not configured.");
+  if (voiceCache && voiceCache.expires > Date.now()) return voiceCache;
+  const voices: AgentVoice[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const page = await aethexAdmin(`/voices?language=english&limit=500&offset=${offset}`);
+    const list: any[] = Array.isArray(page) ? page : Array.isArray(page?.data) ? page.data : [];
+    for (const v of list) if (typeof v.id === "string" && typeof v.name === "string")
+      voices.push({ id: v.id, name: v.name, gender: v.gender || "neutral", country: v.country || undefined, description: v.description || undefined, tags: Array.isArray(v.tags) ? v.tags : [], previewUrl: typeof v.preview_url === "string" && v.preview_url.startsWith("https://") ? v.preview_url : undefined });
+    if (list.length < 500) break;
+  }
+  const template = process.env.AETHEX_AGENT_ID?.trim() ? await aethexAdmin(`/agents/${encodeURIComponent(process.env.AETHEX_AGENT_ID.trim())}`).catch(() => null) : null;
+  voiceCache = { voices, defaultVoiceId: template?.voice_id, expires: Date.now() + 3600000 };
+  return voiceCache;
+}
+/** Saves the owner's voice choice; the agent sync applies it to the provider agent. */
+export async function chooseAgentVoice(id: string, voiceId: string, deps: Pick<ProvisionDependencies, "read" | "save"> = live, catalog = voiceCatalog): Promise<Snapshot> {
+  if (!(await catalog()).voices.some(v => v.id === voiceId)) throw new HttpError(400, "Choose one of the listed voices.");
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const snapshot = await deps.read(id);
+    const voice = snapshot.state.business.voice;
+    if (!voice) throw new HttpError(409, "Set up a business phone number before choosing a voice.");
+    if (voice.voiceId === voiceId) return snapshot;
+    try { return await deps.save(id, snapshot.revision, { ...snapshot.state, business: { ...snapshot.state.business, voice: { ...voice, voiceId } } }); }
+    catch (error) { if (!(error instanceof HttpError && error.status === 409)) throw error; }
+  }
+  throw new HttpError(409, "The workspace changed while saving the voice. Try again.");
 }
 export async function requestBusinessNumber(id: string, country: string): Promise<Snapshot> {
   const snapshot = await workspaces.read(id);
@@ -132,11 +163,11 @@ const live: ProvisionDependencies = {
     const template = await aethexAdmin(`/agents/${encodeURIComponent(process.env.AETHEX_AGENT_ID!.trim())}`);
     const agent = await aethexAdmin("/agents", "POST", {
       name: `${business.name} — Reserv`, voice_id: template.voice_id, language: template.language || "english",
-      ...agentSettings(business),
+      ...agentSettings(snapshot.state),
       metadata: { reserv_business_id: business.id }, public_access: false, recording_enabled: false, transcription_enabled: true,
     });
     if (!agent.id) throw new Error("Agent creation response was incomplete");
-    await syncAgent({ request: aethexAdmin }, agent.id, business);
+    await syncAgent({ request: aethexAdmin }, agent.id, snapshot.state);
     return agent.id;
   },
   async register(number, agentId) {
@@ -215,20 +246,20 @@ export async function provisionBusinessNumber(id: string, deps = live): Promise<
 }
 const syncBackoff = new Map<string, number>();
 /** Updates an active business agent's prompt, transfer number and booking tools, then records the synced fingerprint. */
-export async function syncBusinessAgent(id: string, deps: Pick<ProvisionDependencies, "read" | "save"> = live, api = { request: aethexAdmin }): Promise<boolean> {
-  if ((syncBackoff.get(id) ?? 0) > Date.now()) return false;
+export async function syncBusinessAgent(id: string, deps: Pick<ProvisionDependencies, "read" | "save"> = live, api = { request: aethexAdmin }, force = false): Promise<boolean> {
+  if (!force && (syncBackoff.get(id) ?? 0) > Date.now()) return false;
   try {
     const snapshot = await deps.read(id);
     const voice = snapshot.state.business.voice;
     if (voice?.status !== "active" || !voice.agentId) return false;
-    const fingerprint = agentFingerprint(snapshot.state.business);
+    const fingerprint = agentFingerprint(snapshot.state);
     if (voice.agentConfig === fingerprint) return true;
-    await syncAgent(api, voice.agentId, snapshot.state.business);
+    await syncAgent(api, voice.agentId, snapshot.state);
     for (let attempt = 0; attempt < 5; attempt++) {
       const current = await deps.read(id);
       const currentVoice = current.state.business.voice;
       // The business changed during sync; the next cycle compares the fingerprint again.
-      if (currentVoice?.agentId !== voice.agentId || agentFingerprint(current.state.business) !== fingerprint) return true;
+      if (currentVoice?.agentId !== voice.agentId || agentFingerprint(current.state) !== fingerprint) return true;
       try {
         await deps.save(id, current.revision, { ...current.state, business: { ...current.state.business, voice: { ...currentVoice, agentConfig: fingerprint } } });
         syncBackoff.delete(id);
@@ -254,7 +285,7 @@ export function startNumberProvisioning() {
         const voice = state.business.voice;
         if (isNumberProvisioningConfigured() && voice && (voice.status === "queued" || voice.status === "provisioning" && (!voice.lockUntil || Date.parse(voice.lockUntil) < Date.now())))
           await provisionBusinessNumber(state.business.id);
-        else if (isVoiceToolsConfigured() && voice?.status === "active" && voice.agentId && voice.agentConfig !== agentFingerprint(state.business))
+        else if (isVoiceToolsConfigured() && voice?.status === "active" && voice.agentId && voice.agentConfig !== agentFingerprint(state))
           await syncBusinessAgent(state.business.id);
       }
     } catch { console.error("Business phone provisioning could not complete this cycle."); }

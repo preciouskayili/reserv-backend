@@ -103,7 +103,7 @@ test('active agents receive the new opener once and unchanged configurations do 
   const api = { request: async (path, method, body) => { requests.push({ path, method, body }); return []; } };
   assert.equal(await syncBusinessAgent(h.id, h.deps, api), true);
   assert.equal(requests[0].body.first_message, '{{opening_message}}');
-  assert.equal(h.snapshot().state.business.voice.agentConfig, agentFingerprint(h.snapshot().state.business));
+  assert.equal(h.snapshot().state.business.voice.agentConfig, agentFingerprint(h.snapshot().state));
   const count = requests.length;
   assert.equal(await syncBusinessAgent(h.id, h.deps, api), true);
   assert.equal(requests.length, count);
@@ -120,4 +120,24 @@ test('a provider sync failure does not mark the business agent as up to date', a
   await provisionBusinessNumber(h.id, h.deps);
   assert.equal(await syncBusinessAgent(h.id, h.deps, { request: async () => { throw new Error('Provider unavailable'); } }), false);
   assert.equal(h.snapshot().state.business.voice.agentConfig, undefined);
+});
+
+test('a chosen voice is validated, saved without touching other phone state, and changes the agent fingerprint', async () => {
+  const { chooseAgentVoice } = await import('../dist/services/businessVoice.js');
+  const { agentFingerprint } = await import('../dist/services/voiceAgent.js');
+  const h = fixture();
+  await provisionBusinessNumber(h.id, h.deps);
+  const catalog = async () => ({ voices: [{ id: 'kemi', name: 'Kemi', gender: 'female', tags: [] }] });
+  const before = agentFingerprint(h.snapshot().state);
+  await assert.rejects(chooseAgentVoice(h.id, 'unknown', h.deps, catalog), error => error instanceof HttpError && error.status === 400);
+  await chooseAgentVoice(h.id, 'kemi', h.deps, catalog);
+  const voice = h.snapshot().state.business.voice;
+  assert.equal(voice.voiceId, 'kemi');
+  assert.equal(voice.status, 'active');
+  assert.notEqual(agentFingerprint(h.snapshot().state), before);
+  const empty = fixture();
+  const state = await empty.deps.read(empty.id);
+  delete state.state.business.voice;
+  await empty.deps.save(empty.id, state.revision, state.state);
+  await assert.rejects(chooseAgentVoice(empty.id, 'kemi', empty.deps, catalog), error => error instanceof HttpError && error.status === 409);
 });

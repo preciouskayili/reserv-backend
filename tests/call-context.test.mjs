@@ -14,7 +14,7 @@ const now = Date.parse('2026-10-01T12:00:00Z');
 
 test('the provider opener switches per call without changing the inbound agent defaults', () => {
   const state = fixture();
-  const settings = agentSettings(state.business);
+  const settings = agentSettings(state);
   const render = vars => settings.first_message.replace(/{{(\w+)}}/g, (_, key) => vars[key]);
   assert.equal(render(settings.dynamic_variables), 'Hello, thank you for calling Bloom Studio. How can I help you today?');
   for (const callType of ['reminder', 'confirmation', 'unpaid_checkin', 'manual']) {
@@ -29,6 +29,7 @@ test('the provider opener switches per call without changing the inbound agent d
     for (const [, variable] of SYSTEM_PROMPT.matchAll(/{{(\w+)}}/g)) assert.ok(variable in variables, `Missing prompt variable: ${variable}`);
   }
   assert.equal(settings.dynamic_variables.call_type, 'inbound');
+  for (const [, variable] of SYSTEM_PROMPT.matchAll(/{{(\w+)}}/g)) assert.ok(variable in settings.dynamic_variables, `Missing inbound default: ${variable}`);
   assert.match(SYSTEM_PROMPT, /Call type: {{call_type}}/);
   assert.match(outboundOpening('Bloom Studio'), /May I ask who I'm speaking with/);
 });
@@ -48,8 +49,24 @@ test('outbound booking context rejects completed, cancelled, past and opted-out 
 test('transfer configuration disables missing and self-referencing destinations', () => {
   const state = fixture();
   state.business.voice = { status: 'active', number: '+2348031112222' };
-  assert.equal(agentSettings(state.business).transfer_phone_number, null);
-  assert.equal(agentSettings(state.business).dynamic_variables.transfer_available, false);
+  assert.equal(agentSettings(state).transfer_phone_number, null);
+  assert.equal(agentSettings(state).dynamic_variables.transfer_available, false);
   state.business.phone = '';
-  assert.equal(agentSettings(state.business).transfer_phone_number, null);
+  assert.equal(agentSettings(state).transfer_phone_number, null);
+});
+
+test('business facts and dial-time booking details are preloaded so answers need no tool call', () => {
+  const state = fixture();
+  state.business.faqs = [{ question: 'Is there parking?', answer: 'Yes, behind the building.' }];
+  const settings = agentSettings(state);
+  assert.match(settings.dynamic_variables.business_profile, /12 Admiralty Way/);
+  assert.match(settings.dynamic_variables.business_profile, /Is there parking\? Answer: Yes, behind the building\./);
+  assert.match(settings.dynamic_variables.services_catalog, /Classic Cut: ₦5,000, 30 minutes/);
+  assert.equal(settings.soft_timeout_message, 'Just a moment, please.');
+  assert.equal(settings.voice_id, undefined);
+  state.business.voice = { status: 'active', voiceId: 'chosen-voice' };
+  assert.equal(agentSettings(state).voice_id, 'chosen-voice');
+  const call = bookingCallContext(state, state.bookings[0], 'unpaid_checkin', now);
+  assert.match(call.dynamicVariables.booking_details, /Status Pending; .*total price ₦5,000; .*paid ₦0/);
+  assert.equal(call.dynamicVariables.current_time, 'Thursday 1 October, 1:00 PM');
 });

@@ -4,6 +4,9 @@ import {
   requestBusinessNumber,
   provisionBusinessNumber,
   publicVoice,
+  voiceCatalog,
+  chooseAgentVoice,
+  syncBusinessAgent,
 } from "../services/businessVoice.js";
 import { Router } from "express";
 import {
@@ -28,6 +31,19 @@ router.get("/check-slug", async (req: AuthenticatedRequest, res) => {
 router.get("/voice/countries", async (_req, res) =>
   res.json({ countries: await numberCountries() }),
 );
+router.get("/voice/voices", async (_req, res) =>
+  res.json(await voiceCatalog()),
+);
+router.put("/:id/voice/agent-voice", async (req: AuthenticatedRequest, res) => {
+  const id = String(req.params.id);
+  await workspaces.authorize(req.user!.id, id, true);
+  const voiceId = z.string().min(1).max(100).safeParse(req.body.voiceId);
+  if (!voiceId.success) throw new HttpError(400, "Choose a voice.");
+  const snapshot = await chooseAgentVoice(id, voiceId.data);
+  // Apply now rather than waiting for the next background sync; that sync still retries on failure.
+  void syncBusinessAgent(id, undefined, undefined, true).catch(() => undefined);
+  res.json({ voice: publicVoice(snapshot.state.business.voice) });
+});
 router.get("/:id/voice", async (req: AuthenticatedRequest, res) => {
   const id = String(req.params.id);
   await workspaces.authorize(req.user!.id, id);

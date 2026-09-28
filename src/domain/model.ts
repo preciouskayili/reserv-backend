@@ -72,6 +72,8 @@ export interface BusinessVoice {
   lockToken?: string; lockUntil?: string; error?: string;
   /** Fingerprint of the prompt and tools last applied to the provider agent. */
   agentConfig?: string;
+  /** Aethex voice the owner chose; the template agent's voice is used until then. */
+  voiceId?: string;
 }
 export interface Business {
   voice?: BusinessVoice;

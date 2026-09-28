@@ -70,6 +70,7 @@ export const stateSchema = z.object({
         lockUntil: timestamp.optional(),
         error: text.optional(),
         agentConfig: z.string().max(64).optional(),
+        voiceId: z.string().max(100).optional(),
       })
       .optional(),
     logoUrl: imageUrl.optional(),
