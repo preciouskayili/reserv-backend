@@ -98,8 +98,9 @@ export const DEFAULT_VARIABLES = {
   business_profile: "not provided", services_catalog: "not provided",
 };
 
-// Played if a reply (usually a tool lookup) takes longer than this, so the caller never hears dead air.
-export const FILLER = { soft_timeout_seconds: 2.5, soft_timeout_message: "Just a moment, please.", soft_timeout_use_llm: false };
+// Backstop for a genuinely slow lookup only. Normal replies take a few seconds, and the prompt already has the
+// agent say a short phrase before each tool, so a shorter timeout made this line repeat throughout calls.
+export const FILLER = { soft_timeout_seconds: 6, soft_timeout_message: "Thanks for bearing with me, I'm still checking.", soft_timeout_use_llm: false };
 
 type AgentState = Pick<AppState, "business" | "services" | "staff">;
 

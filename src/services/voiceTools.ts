@@ -113,14 +113,20 @@ export interface ToolDefinition {
   run: (ctx: VoiceCallContext, args: unknown, now: number) => Promise<ToolResult>;
 }
 
-const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
+// Portable JSON Schema only. Some model providers (notably Gemini) reject additionalProperties, empty "required"
+// lists and empty "properties", and a rejected tool list stops the agent from replying at all. Arguments are
+// validated server-side with zod regardless.
+const object = (properties: Record<string, unknown>, required: string[] = []) => {
+  if (!Object.keys(properties).length) throw new Error("Give every tool at least one (optional) parameter");
+  return { type: "object", properties, ...(required.length ? { required } : {}) };
+};
 const str = (description: string) => ({ type: "string", description });
 
 export const voiceTools: ToolDefinition[] = [
   {
     name: "get_business_info",
     description: "Get the business's latest address, opening hours, phone number, policies, FAQs, and the current date and time. The business profile and current time are already in your instructions; only use this when something you need is missing there.",
-    parameters: object({}),
+    parameters: object({ topic: str("Optional: what the caller asked about, for example parking or opening hours") }),
     async run(ctx, _args, now) {
       return businessInfo((await workspaces.read(ctx.businessId)).state, now);
     },
@@ -128,7 +134,7 @@ export const voiceTools: ToolDefinition[] = [
   {
     name: "list_services",
     description: "List the services offered, with prices in Naira, durations, deposits and which specialists provide each. The services list is already in your instructions; only use this when a service you need is missing there.",
-    parameters: object({}),
+    parameters: object({ service: str("Optional: the service the caller asked about") }),
     async run(ctx) {
       return { services: serviceCatalog((await workspaces.read(ctx.businessId)).state) };
     },
@@ -286,7 +292,7 @@ export const voiceTools: ToolDefinition[] = [
   {
     name: "stop_customer_calls",
     description: "Stop future outbound calls to the verified phone number on this call when the recipient says it is a wrong number or asks not to be called again. Does not cancel any bookings. Never use for someone who is just busy.",
-    parameters: object({}),
+    parameters: object({ reason: str("Optional: wrong number, or asked not to be called") }),
     async run(ctx) {
       if (!ctx.customerPhone) throw new HttpError(400, "The caller's number is hidden. Ask them to contact the business to update their call preferences.");
       return withLatest(ctx.businessId, async snapshot => {

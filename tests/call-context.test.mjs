@@ -62,7 +62,7 @@ test('business facts and dial-time booking details are preloaded so answers need
   assert.match(settings.dynamic_variables.business_profile, /12 Admiralty Way/);
   assert.match(settings.dynamic_variables.business_profile, /Is there parking\? Answer: Yes, behind the building\./);
   assert.match(settings.dynamic_variables.services_catalog, /Classic Cut: ₦5,000, 30 minutes/);
-  assert.equal(settings.soft_timeout_message, 'Just a moment, please.');
+  assert.equal(settings.soft_timeout_seconds, 6);
   assert.equal(settings.voice_id, undefined);
   state.business.voice = { status: 'active', voiceId: 'chosen-voice' };
   assert.equal(agentSettings(state).voice_id, 'chosen-voice');
